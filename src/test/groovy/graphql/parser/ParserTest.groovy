@@ -1,10 +1,10 @@
 package graphql.parser
 
-import graphql.ExecutionInput
-import graphql.TestUtil
+
 import graphql.language.Argument
 import graphql.language.ArrayValue
 import graphql.language.AstComparator
+import graphql.language.AstPrinter
 import graphql.language.BooleanValue
 import graphql.language.Description
 import graphql.language.Directive
@@ -40,31 +40,15 @@ import graphql.language.TypeName
 import graphql.language.UnionTypeDefinition
 import graphql.language.VariableDefinition
 import graphql.language.VariableReference
-import graphql.parser.exceptions.ParseCancelledException
 import org.antlr.v4.runtime.CommonTokenStream
 import org.antlr.v4.runtime.ParserRuleContext
 import spock.lang.Issue
 import spock.lang.Specification
 import spock.lang.Unroll
 
+import static graphql.parser.ParserEnvironment.*
+
 class ParserTest extends Specification {
-
-    static defaultOptions = ParserOptions.getDefaultParserOptions()
-    static defaultOperationOptions = ParserOptions.getDefaultOperationParserOptions()
-    static defaultSdlOptions = ParserOptions.getDefaultSdlParserOptions()
-
-    void setup() {
-        ParserOptions.setDefaultParserOptions(defaultOptions)
-        ParserOptions.setDefaultOperationParserOptions(defaultOperationOptions)
-        ParserOptions.setDefaultSdlParserOptions(defaultSdlOptions)
-    }
-
-    void cleanup() {
-        ParserOptions.setDefaultParserOptions(defaultOptions)
-        ParserOptions.setDefaultOperationParserOptions(defaultOperationOptions)
-        ParserOptions.setDefaultSdlParserOptions(defaultSdlOptions)
-    }
-
 
     def "parse anonymous simple query"() {
         given:
@@ -90,10 +74,6 @@ class ParserTest extends Specification {
 
 
     boolean isEqual(Node node1, Node node2) {
-        return AstComparator.isEqual(node1, node2)
-    }
-
-    boolean isEqual(List<Node> node1, List<Node> node2) {
         return AstComparator.isEqual(node1, node2)
     }
 
@@ -404,7 +384,8 @@ class ParserTest extends Specification {
                 .build()
 
         when:
-        def document = new Parser().parseDocument(input, parserOptionsWithoutCaptureLineComments)
+        def parserEnvironment = newParserEnvironment().document(input).parserOptions(parserOptionsWithoutCaptureLineComments).build()
+        def document = new Parser().parseDocument(parserEnvironment)
         Field helloField = (document.definitions[0] as OperationDefinition).selectionSet.selections[0] as Field
 
         then:
@@ -772,7 +753,9 @@ triple3 : """edge cases \\""" "" " \\"" \\" edge cases"""
         when:
         def captureIgnoredCharsTRUE = ParserOptions.newParserOptions().captureIgnoredChars(true).build()
 
-        Document document = new Parser().parseDocument(input, captureIgnoredCharsTRUE)
+        def parserEnvironment = newParserEnvironment().document(input).parserOptions(captureIgnoredCharsTRUE).build()
+
+        Document document = new Parser().parseDocument(parserEnvironment)
         def field = (document.definitions[0] as OperationDefinition).selectionSet.selections[0]
         then:
         field.getIgnoredChars().getLeft().size() == 3
@@ -868,7 +851,7 @@ triple3 : """edge cases \\""" "" " \\"" \\" edge cases"""
                }
     '''
         when:
-        def parserEnvironment = ParserEnvironment.newParserEnvironment().document(input).build()
+        def parserEnvironment = newParserEnvironment().document(input).build()
 
         Document document = Parser.parse(parserEnvironment)
         OperationDefinition operationDefinition = (document.definitions[0] as OperationDefinition)
@@ -1043,7 +1026,8 @@ triple3 : """edge cases \\""" "" " \\"" \\" edge cases"""
         def captureIgnoredCharsTRUE = ParserOptions.newParserOptions().captureIgnoredChars(true).build()
 
         when: "explicitly off"
-        def doc = new Parser().parseDocument(s, captureIgnoredCharsFALSE)
+        def parserEnvironment = newParserEnvironment().document(s).parserOptions(captureIgnoredCharsFALSE).build()
+        def doc = new Parser().parseDocument(parserEnvironment)
         def type = doc.getDefinitionsOfType(ObjectTypeDefinition)[0]
         then:
         type.getIgnoredChars() == IgnoredChars.EMPTY
@@ -1058,7 +1042,8 @@ triple3 : """edge cases \\""" "" " \\"" \\" edge cases"""
 
         when: "explicitly on"
 
-        doc = new Parser().parseDocument(s, captureIgnoredCharsTRUE)
+        parserEnvironment = newParserEnvironment().document(s).parserOptions(captureIgnoredCharsTRUE).build()
+        doc = new Parser().parseDocument(parserEnvironment)
         type = doc.getDefinitionsOfType(ObjectTypeDefinition)[0]
 
         then:
@@ -1158,7 +1143,8 @@ triple3 : """edge cases \\""" "" " \\"" \\" edge cases"""
 
         when:
         options = ParserOptions.newParserOptions().captureSourceLocation(false).build()
-        document = new Parser().parseDocument("{ f }", options)
+        def parserEnvironment = newParserEnvironment().document("{ f }").parserOptions(options).build()
+        document = new Parser().parseDocument(parserEnvironment)
 
         then:
         !options.isCaptureSourceLocation()
@@ -1166,104 +1152,106 @@ triple3 : """edge cases \\""" "" " \\"" \\" edge cases"""
         document.getDefinitions()[0].getSourceLocation() == SourceLocation.EMPTY
     }
 
-    def "a billion laughs attack will be prevented by default"() {
-        def lol = "@lol" * 10000 // two tokens = 20000+ tokens
-        def text = "query { f $lol }"
+    def "escape characters correctly printed when printing AST"() {
+        given:
+        def env = newParserEnvironment()
+                .document(src)
+                .parserOptions(
+                        ParserOptions.newParserOptions()
+                                .captureIgnoredChars(true)
+                                .build()
+                )
+                .build()
+
         when:
-        Parser.parse(text)
+        // Parse the original Document
+        def doc = Parser.parse(env)
+        // Print the AST
+        def printed = AstPrinter.printAst(doc)
+        // Re-parse printed AST
+        def reparsed = Parser.parse(printed)
 
         then:
-        def e = thrown(ParseCancelledException)
-        e.getMessage().contains("parsing has been cancelled")
+        noExceptionThrown() // The printed AST was re-parsed without exception
 
-        when: "integration test to prove it cancels by default"
+        when:
+        def reparsedPrinted = AstPrinter.printAst(reparsed)
 
-        def sdl = """type Query { f : ID} """
-        def graphQL = TestUtil.graphQL(sdl).build()
-        def er = graphQL.execute(text)
         then:
-        er.errors.size() == 1
-        er.errors[0].message.contains("parsing has been cancelled")
+        reparsedPrinted == printed // Re-parsing and re-printing produces the same result
+
+        where:
+        src                 | _
+        "\"\\\"\" scalar A" | _
+        "\"\f\" scalar A"   | _
+        "\"\b\" scalar A"   | _
+        "\"\t\" scalar A"   | _
     }
 
-    def "a large whitespace laughs attack will be prevented by default"() {
-        def spaces = " " * 300_000
-        def text = "query { f $spaces }"
-        when:
-        Parser.parse(text)
+    def "can redact tokens in InvalidSyntax parser error message"() {
+        given:
+        def input = '''""" scalar ComputerSaysNo'''
+
+        when: // Default options do not redact error messages
+        Parser.parse(input)
 
         then:
-        def e = thrown(ParseCancelledException)
-        e.getMessage().contains("parsing has been cancelled")
+        InvalidSyntaxException e = thrown(InvalidSyntaxException)
+        e.message == '''Invalid syntax with ANTLR error 'token recognition error at: '""" scalar ComputerSaysNo'' at line 1 column 1'''
 
-        when: "integration test to prove it cancels by default"
+        when: // Enable redacted parser error messages
+        def redactParserErrorMessages = ParserOptions.newParserOptions().redactTokenParserErrorMessages(true).build()
+        def parserEnvironment = newParserEnvironment().document(input).parserOptions(redactParserErrorMessages).build()
+        new Parser().parseDocument(parserEnvironment)
 
-        def sdl = """type Query { f : ID} """
-        def graphQL = TestUtil.graphQL(sdl).build()
-        def er = graphQL.execute(text)
         then:
-        er.errors.size() == 1
-        er.errors[0].message.contains("parsing has been cancelled")
+        InvalidSyntaxException redactedError = thrown(InvalidSyntaxException)
+        redactedError.message == "Invalid syntax at line 1 column 1"
     }
 
-    def "they can shoot themselves if they want to with large documents"() {
-        def lol = "@lol" * 10000 // two tokens = 20000+ tokens
-        def text = "query { f $lol }"
+    def "can redact tokens in InvalidSyntaxBail parser error message"() {
+        given:
+        def input = '''
+            query {
+              computer says no!!!!!!
+        '''
 
-        def options = ParserOptions.newParserOptions().maxTokens(30000).build()
-        when:
-        def doc = new Parser().parseDocument(text, options)
+        when: // Default options do not redact error messages
+        Parser.parse(input)
 
         then:
-        doc != null
+        InvalidSyntaxException e = thrown(InvalidSyntaxException)
+        e.message == "Invalid syntax with offending token '!' at line 3 column 31"
+
+        when: // Enable redacted parser error messages
+        def redactParserErrorMessages = ParserOptions.newParserOptions().redactTokenParserErrorMessages(true).build()
+        def parserEnvironment = newParserEnvironment().document(input).parserOptions(redactParserErrorMessages).build()
+        new Parser().parseDocument(parserEnvironment)
+
+        then:
+        InvalidSyntaxException redactedError = thrown(InvalidSyntaxException)
+        redactedError.message == "Invalid syntax at line 3 column 31"
     }
 
-    def "they can shoot themselves if they want to with large documents with lots of whitespace"() {
-        def spaces = " " * 300_000
-        def text = "query { f $spaces }"
+    def "can redact tokens in InvalidSyntaxMoreTokens parser error message"() {
+        given:
+        def input = "{profile(id:117) {computer, says, no}}}"
 
-        def options = ParserOptions.newParserOptions().maxWhitespaceTokens(Integer.MAX_VALUE).build()
-        when:
-        def doc = new Parser().parseDocument(text, options)
 
-        then:
-        doc != null
-    }
-
-    def "they can set their own listener into action"() {
-        def queryText = "query { f(arg : 1) }"
-
-        def count = 0
-        def tokens = []
-        ParsingListener listener = { count++; tokens.add(it.getText()) }
-        def parserOptions = ParserOptions.newParserOptions().parsingListener(listener).build()
-        when:
-        def doc = new Parser().parseDocument(queryText, parserOptions)
+        when: // Default options do not redact error messages
+        Parser.parse(input)
 
         then:
-        doc != null
-        count == 9
-        tokens == ["query", "{", "f", "(", "arg", ":", "1", ")", "}"]
+        InvalidSyntaxException e = thrown(InvalidSyntaxException)
+        e.message == "Invalid syntax encountered. There are extra tokens in the text that have not been consumed. Offending token '}' at line 1 column 39"
 
-        when: "integration test to prove it be supplied via EI"
+        when: // Enable redacted parser error messages
+        def redactParserErrorMessages = ParserOptions.newParserOptions().redactTokenParserErrorMessages(true).build()
+        def parserEnvironment = newParserEnvironment().document(input).parserOptions(redactParserErrorMessages).build()
+        new Parser().parseDocument(parserEnvironment)
 
-        def sdl = """type Query { f(arg : Int) : ID} """
-        def graphQL = TestUtil.graphQL(sdl).build()
-
-
-        def context = [:]
-        context.put(ParserOptions.class, parserOptions)
-        def executionInput = ExecutionInput.newExecutionInput()
-                .query(queryText)
-                .graphQLContext(context).build()
-
-        count = 0
-        tokens = []
-        def er = graphQL.execute(executionInput)
         then:
-        er.errors.size() == 0
-        count == 9
-        tokens == ["query", "{", "f", "(", "arg", ":", "1", ")", "}"]
-
+        InvalidSyntaxException redactedError = thrown(InvalidSyntaxException)
+        redactedError.message == "Invalid syntax encountered. There are extra tokens in the text that have not been consumed. Offending token at line 1 column 39"
     }
 }

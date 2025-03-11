@@ -125,7 +125,6 @@ class DataLoaderHangingTest extends Specification {
 
         when:
         def graphql = GraphQL.newGraphQL(schema)
-                .instrumentation(new DataLoaderDispatcherInstrumentation())
                 .build()
 
         then: "execution shouldn't hang"
@@ -241,8 +240,13 @@ class DataLoaderHangingTest extends Specification {
         """
 
     DataFetcherExceptionHandler customExceptionHandlerThatThrows = new DataFetcherExceptionHandler() {
+
         @Override
-        DataFetcherExceptionHandlerResult onException(DataFetcherExceptionHandlerParameters handlerParameters) { // Retain for test coverage, intentionally using sync version.
+        CompletableFuture<DataFetcherExceptionHandlerResult> handleException(DataFetcherExceptionHandlerParameters handlerParameters) {
+            //
+            // this is a weird test case - its not actually handling the exception - its a test
+            // case where the handler code itself throws an exception during the handling
+            // and that will not stop the DataLoader from being dispatched
             throw handlerParameters.exception
         }
     }
@@ -348,7 +352,6 @@ class DataLoaderHangingTest extends Specification {
         GraphQL graphQL = GraphQL
                 .newGraphQL(graphQLSchema)
                 .queryExecutionStrategy(new AsyncExecutionStrategy(customExceptionHandlerThatThrows))
-                .instrumentation(new DataLoaderDispatcherInstrumentation())
                 .build()
 
         when:

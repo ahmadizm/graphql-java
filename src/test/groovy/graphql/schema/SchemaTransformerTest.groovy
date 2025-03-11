@@ -931,4 +931,95 @@ type Query {
         (appliedDirective.getArgument("fooArgOnDirective").getType() as GraphQLScalarType).getName() == "Bar"
         newSchema.getType("Foo") == null
     }
+
+    def "has access to common variables"() {
+        def schema = TestUtil.schema("""
+            type Query {
+              foo : String
+            }
+        """)
+
+        def visitedSchema = null
+        def visitedCodeRegistry = null
+        def visitor = new GraphQLTypeVisitorStub() {
+
+            @Override
+            TraversalControl visitGraphQLFieldDefinition(GraphQLFieldDefinition node, TraverserContext<GraphQLSchemaElement> context) {
+                visitedSchema = context.getVarFromParents(GraphQLSchema.class)
+                visitedCodeRegistry = context.getVarFromParents(GraphQLCodeRegistry.Builder.class)
+                return super.visitGraphQLFieldDefinition(node, context)
+            }
+
+        }
+
+        when:
+        SchemaTransformer.transformSchema(schema, visitor)
+
+        then:
+        visitedSchema == schema
+        visitedCodeRegistry instanceof GraphQLCodeRegistry.Builder
+    }
+
+    def "deprecation transformation correctly overrides existing deprecated directive reasons"() {
+        def schema = TestUtil.schema("""
+          schema {
+            query: QueryType
+          }
+                
+          type QueryType {
+            a: String
+            b: String @deprecated(reason: "Replace this doc")
+          }
+          
+          interface InterfaceType {
+            a: String
+            b: String @deprecated(reason: "Replace this doc")
+          }
+          
+          input InputType {
+            a: String
+            b: String @deprecated(reason: "Replace this doc")
+          }
+        """)
+
+        when:
+        def typeVisitor = new GraphQLTypeVisitorStub() {
+            @Override
+            TraversalControl visitGraphQLFieldDefinition(GraphQLFieldDefinition node, TraverserContext<GraphQLSchemaElement> context) {
+                def n = node.transform(b -> b.deprecate("NEW REASON"));
+                return changeNode(context, n);
+            }
+
+            @Override
+            TraversalControl visitGraphQLInputObjectField(GraphQLInputObjectField node, TraverserContext<GraphQLSchemaElement> context) {
+                def n = node.transform(b -> b.deprecate("NEW REASON"));
+                return changeNode(context, n);
+            }
+        }
+        def newSchema = SchemaTransformer.transformSchema(schema, typeVisitor)
+
+        then:
+        def newQueryType = newSchema.getObjectType("QueryType")
+        def newQueryTypePrinted = new SchemaPrinter().print(newQueryType)
+
+        newQueryTypePrinted == """type QueryType {
+  a: String @deprecated(reason : "NEW REASON")
+  b: String @deprecated(reason : "NEW REASON")
+}
+"""
+        def newInterfaceType = newSchema.getType("InterfaceType")
+        def newInterfaceTypePrinted = new SchemaPrinter().print(newInterfaceType)
+        newInterfaceTypePrinted == """interface InterfaceType {
+  a: String @deprecated(reason : "NEW REASON")
+  b: String @deprecated(reason : "NEW REASON")
+}
+"""
+        def newInputType = newSchema.getType("InputType")
+        def newInputTypePrinted = new SchemaPrinter().print(newInputType)
+        newInputTypePrinted == """input InputType {
+  a: String @deprecated(reason : "NEW REASON")
+  b: String @deprecated(reason : "NEW REASON")
+}
+"""
+    }
 }

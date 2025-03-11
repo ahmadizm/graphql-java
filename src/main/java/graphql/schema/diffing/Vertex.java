@@ -62,7 +62,7 @@ public class Vertex {
     }
 
     public String getName() {
-        return (String) Assert.assertNotNull(properties.get("name"), () -> String.format("should not call getName on %s", this));
+        return (String) Assert.assertNotNull(properties.get("name"), "should not call getName on %s", this);
     }
 
     public Map<String, Object> getProperties() {
@@ -95,7 +95,7 @@ public class Vertex {
     public String toString() {
         return "Vertex{" +
                 "type='" + type + '\'' +
-                ", properties=" + properties +
+                ", properties=" + properties.toString().replace("\n", "<NL>") +
                 ", debugName='" + debugName + '\'' +
                 ", builtInType='" + builtInType + '\'' +
                 '}';

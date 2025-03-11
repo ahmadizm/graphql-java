@@ -1,29 +1,27 @@
 package graphql.schema
 
 import graphql.Scalars
+import graphql.TestUtil
 import graphql.util.TraversalControl
 import graphql.util.TraverserContext
 import spock.lang.Specification
 
+import static graphql.introspection.Introspection.DirectiveLocation
 import static graphql.schema.GraphQLArgument.newArgument
 import static graphql.schema.GraphQLTypeReference.typeRef
 import static graphql.schema.GraphqlTypeComparatorRegistry.BY_NAME_REGISTRY
+import static graphql.TestUtil.mkDirective
 
 class SchemaTraverserTest extends Specification {
-
 
     def "reachable scalar type"() {
 
         when:
-
         def visitor = new GraphQLTestingVisitor()
         new SchemaTraverser().depthFirst(visitor, Scalars.GraphQLString)
 
         then:
-
         visitor.getStack() == ["scalar: String", "fallback: String"]
-
-
     }
 
     def "reachable string argument type"() {
@@ -47,7 +45,6 @@ class SchemaTraverserTest extends Specification {
                 .build())
         then:
         visitor.getStack() == ["argument: Test", "fallback: Test", "scalar: Int", "fallback: Int"]
-
     }
 
     def "reachable enum type"() {
@@ -64,7 +61,6 @@ class SchemaTraverserTest extends Specification {
         visitor.getStack() == ["enum: foo", "fallback: foo",
                                "enum value: abc", "fallback: abc",
                                "enum value: bar", "fallback: bar"]
-
     }
 
     def "reachable field definition type"() {
@@ -76,7 +72,6 @@ class SchemaTraverserTest extends Specification {
                 .build())
         then:
         visitor.getStack() == ["field: foo", "fallback: foo", "scalar: String", "fallback: String"]
-
     }
 
     def "reachable input object field type"() {
@@ -105,7 +100,6 @@ class SchemaTraverserTest extends Specification {
                                "input object field: bar", "fallback: bar",
                                "scalar: String", "fallback: String"]
     }
-
 
     def "reachable interface type"() {
         when:
@@ -162,7 +156,6 @@ class SchemaTraverserTest extends Specification {
                                "interface: bar", "fallback: bar"]
     }
 
-
     def "reachable reference type"() {
         when:
         def visitor = new GraphQLTestingVisitor()
@@ -209,8 +202,7 @@ class SchemaTraverserTest extends Specification {
         def scalarType = GraphQLScalarType.newScalar()
                 .name("foo")
                 .coercing(coercing)
-                .withDirective(GraphQLDirective.newDirective()
-                        .name("bar"))
+                .withDirective(mkDirective("bar", DirectiveLocation.SCALAR))
                 .withAppliedDirective(GraphQLAppliedDirective.newDirective()
                         .name("barApplied"))
                 .build()
@@ -226,8 +218,7 @@ class SchemaTraverserTest extends Specification {
         def visitor = new GraphQLTestingVisitor()
         def objectType = GraphQLObjectType.newObject()
                 .name("foo")
-                .withDirective(GraphQLDirective.newDirective()
-                        .name("bar"))
+                .withDirective(mkDirective("bar", DirectiveLocation.OBJECT))
                 .withAppliedDirective(GraphQLAppliedDirective.newDirective()
                         .name("barApplied"))
                 .build()
@@ -244,8 +235,7 @@ class SchemaTraverserTest extends Specification {
         def fieldDefinition = GraphQLFieldDefinition.newFieldDefinition()
                 .name("foo")
                 .type(Scalars.GraphQLString)
-                .withDirective(GraphQLDirective.newDirective()
-                        .name("bar"))
+                .withDirective(mkDirective("bar", DirectiveLocation.FIELD_DEFINITION))
                 .withAppliedDirective(GraphQLAppliedDirective.newDirective()
                         .name("barApplied"))
                 .build()
@@ -262,8 +252,7 @@ class SchemaTraverserTest extends Specification {
         def argument = newArgument()
                 .name("foo")
                 .type(Scalars.GraphQLString)
-                .withDirective(GraphQLDirective.newDirective()
-                        .name("bar"))
+                .withDirective(mkDirective("bar", DirectiveLocation.ARGUMENT_DEFINITION))
                 .withAppliedDirective(GraphQLAppliedDirective.newDirective()
                         .name("barApplied"))
                 .build()
@@ -279,8 +268,7 @@ class SchemaTraverserTest extends Specification {
         def visitor = new GraphQLTestingVisitor()
         def interfaceType = GraphQLInterfaceType.newInterface()
                 .name("foo")
-                .withDirective(GraphQLDirective.newDirective()
-                        .name("bar"))
+                .withDirective(mkDirective("bar", DirectiveLocation.INTERFACE))
                 .withAppliedDirective(GraphQLAppliedDirective.newDirective()
                         .name("barApplied"))
                 .build()
@@ -297,8 +285,7 @@ class SchemaTraverserTest extends Specification {
         def unionType = GraphQLUnionType.newUnionType()
                 .name("foo")
                 .possibleType(GraphQLObjectType.newObject().name("dummy").build())
-                .withDirective(GraphQLDirective.newDirective()
-                        .name("bar"))
+                .withDirective(mkDirective("bar", DirectiveLocation.UNION))
                 .build()
         new SchemaTraverser().depthFirst(visitor, unionType)
         then:
@@ -311,8 +298,7 @@ class SchemaTraverserTest extends Specification {
         def enumType = GraphQLEnumType.newEnum()
                 .name("foo")
                 .value("dummy")
-                .withDirective(GraphQLDirective.newDirective()
-                        .name("bar"))
+                .withDirective(mkDirective("bar", DirectiveLocation.ENUM))
                 .build()
         new SchemaTraverser().depthFirst(visitor, enumType)
         then:
@@ -324,8 +310,7 @@ class SchemaTraverserTest extends Specification {
         def visitor = new GraphQLTestingVisitor()
         def enumValue = GraphQLEnumValueDefinition.newEnumValueDefinition()
                 .name("foo")
-                .withDirective(GraphQLDirective.newDirective()
-                        .name("bar"))
+                .withDirective(mkDirective("bar", DirectiveLocation.ENUM_VALUE))
                 .build()
         new SchemaTraverser().depthFirst(visitor, enumValue)
         then:
@@ -337,8 +322,7 @@ class SchemaTraverserTest extends Specification {
         def visitor = new GraphQLTestingVisitor()
         def inputObjectType = GraphQLInputObjectType.newInputObject()
                 .name("foo")
-                .withDirective(GraphQLDirective.newDirective()
-                        .name("bar"))
+                .withDirective(mkDirective("bar", DirectiveLocation.INPUT_OBJECT))
                 .build()
         new SchemaTraverser().depthFirst(visitor, inputObjectType)
         then:
@@ -351,8 +335,7 @@ class SchemaTraverserTest extends Specification {
         def inputField = GraphQLInputObjectField.newInputObjectField()
                 .name("foo")
                 .type(Scalars.GraphQLString)
-                .withDirective(GraphQLDirective.newDirective()
-                        .name("bar"))
+                .withDirective(mkDirective("bar", DirectiveLocation.INPUT_FIELD_DEFINITION))
                 .build()
         new SchemaTraverser().depthFirst(visitor, inputField)
         then:
@@ -379,7 +362,50 @@ class SchemaTraverserTest extends Specification {
         visitor.getStack() == ["argument: Test1", "fallback: Test1", "reference: String", "fallback: String",
                                "argument: Test2", "fallback: Test2", "backRef: String"
         ]
+    }
 
+    def "can quit the schema traverser"() {
+        def sdl = """
+            type Query {
+                f : ObjType
+                f2NeverVisited : String
+            }
+            
+            type ObjType {
+                fQuit : ObjType2
+            }
+            
+            type ObjType2 {
+                neverVisited : String
+            }
+        """
+
+        def schema = TestUtil.schema(sdl)
+
+        def visitor = new GraphQLTestingVisitor() {
+            @Override
+            TraversalControl visitGraphQLFieldDefinition(GraphQLFieldDefinition node, TraverserContext<GraphQLSchemaElement> context) {
+                super.visitGraphQLFieldDefinition(node, context)
+                if (node.name.contains("Quit")) {
+                    return TraversalControl.QUIT
+                }
+                return TraversalControl.CONTINUE
+            }
+        }
+
+        when:
+        new SchemaTraverser().depthFirstFullSchema(visitor, schema)
+
+        then:
+        visitor.getStack() == ["object: Query",
+                               "fallback: Query",
+                               "field: f",
+                               "fallback: f",
+                               "object: ObjType",
+                               "fallback: ObjType",
+                               "field: fQuit",
+                               "fallback: fQuit",
+        ]
     }
 
     class GraphQLTestingVisitor extends GraphQLTypeVisitorStub {

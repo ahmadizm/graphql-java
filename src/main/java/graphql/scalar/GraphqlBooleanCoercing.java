@@ -15,7 +15,6 @@ import org.jetbrains.annotations.Nullable;
 import java.math.BigDecimal;
 import java.util.Locale;
 
-import static graphql.Assert.assertNotNull;
 import static graphql.Assert.assertShouldNeverHappen;
 import static graphql.scalar.CoercingUtil.i18nMsg;
 import static graphql.scalar.CoercingUtil.isNumberIsh;
@@ -87,7 +86,10 @@ public class GraphqlBooleanCoercing implements Coercing<Boolean, Boolean> {
 
     @NotNull
     private BooleanValue valueToLiteralImpl(@NotNull Object input, @NotNull Locale locale) {
-        Boolean result = assertNotNull(convertImpl(input), () -> i18nMsg(locale, "Boolean.notBoolean", typeName(input)));
+        Boolean result = convertImpl(input);
+        if (result == null) {
+            assertShouldNeverHappen(i18nMsg(locale, "Boolean.notBoolean", typeName(input)));
+        }
         return BooleanValue.newBooleanValue(result).build();
     }
 
@@ -126,7 +128,7 @@ public class GraphqlBooleanCoercing implements Coercing<Boolean, Boolean> {
 
     @Override
     @Deprecated
-    public Value valueToLiteral(@NotNull Object input) {
+    public @NotNull Value<?> valueToLiteral(@NotNull Object input) {
         return valueToLiteralImpl(input, Locale.getDefault());
     }
 

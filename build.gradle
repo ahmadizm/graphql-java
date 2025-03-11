@@ -7,49 +7,65 @@ plugins {
     id 'maven-publish'
     id 'antlr'
     id 'signing'
-    id "com.github.johnrengelman.shadow" version "7.1.2"
-    id "biz.aQute.bnd.builder" version "6.3.1"
-    id "io.github.gradle-nexus.publish-plugin" version "1.1.0"
+    id "com.gradleup.shadow" version "8.3.6"
+    id "biz.aQute.bnd.builder" version "6.4.0"
+    id "io.github.gradle-nexus.publish-plugin" version "2.0.0"
     id "groovy"
-    id "me.champeau.jmh" version "0.6.6"
+    id "me.champeau.jmh" version "0.7.3"
 }
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(8)
+        languageVersion = JavaLanguageVersion.of(11)
     }
+}
+
+def makeDevelopmentVersion(parts) {
+    def version = String.join("-", parts)
+    println "created development version: $version"
+    return version
 }
 
 def getDevelopmentVersion() {
+    def dateTime = new SimpleDateFormat('yyyy-MM-dd\'T\'HH-mm-ss').format(new Date())
     def gitCheckOutput = new StringBuilder()
     def gitCheckError = new StringBuilder()
-    def gitCheck = ["git", "rev-parse", "--is-inside-work-tree"].execute()
+    def gitCheck = ["git", "-C", projectDir.toString(), "rev-parse", "--is-inside-work-tree"].execute()
     gitCheck.waitForProcessOutput(gitCheckOutput, gitCheckError)
     def isGit = gitCheckOutput.toString().trim()
     if (isGit != "true") {
-        def version = "0.0.0-" + new SimpleDateFormat('yyyy-MM-dd\'T\'HH-mm-ss').format(new Date()) + "-no-git"
-        println "created development version: $version"
-        return version
+        return makeDevelopmentVersion(["0.0.0", dateTime, "no-git"])
     }
 
-    def gitHashOutput = new StringBuilder()
-    def gitHashError = new StringBuilder()
-    def gitShortHash = ["git", "-C", projectDir.toString(), "rev-parse", "--short", "HEAD"].execute()
-    gitShortHash.waitForProcessOutput(gitHashOutput, gitHashError)
-    def gitHash = gitHashOutput.toString().trim()
-    if (gitHash.isEmpty()) {
-        println "git hash is empty: error: ${error.toString()}"
-        throw new IllegalStateException("git hash could not be determined")
+    // a default Github Action env variable set to 'true'
+    def isCi = Boolean.parseBoolean(System.env.CI)
+    if (isCi) {
+        def gitHashOutput = new StringBuilder()
+        def gitHashError = new StringBuilder()
+        def gitShortHash = ["git", "-C", projectDir.toString(), "rev-parse", "--short", "HEAD"].execute()
+        gitShortHash.waitForProcessOutput(gitHashOutput, gitHashError)
+        def gitHash = gitHashOutput.toString().trim()
+        if (gitHash.isEmpty()) {
+            println "git hash is empty: error: ${gitHashError.toString()}"
+            throw new IllegalStateException("git hash could not be determined")
+        }
+
+        return makeDevelopmentVersion(["0.0.0", dateTime, gitHash])
     }
-    def version = "0.0.0-" + new SimpleDateFormat('yyyy-MM-dd\'T\'HH-mm-ss').format(new Date()) + "-" + gitHash
-    println "created development version: $version"
-    version
+
+    def gitRevParseOutput = new StringBuilder()
+    def gitRevParseError = new StringBuilder()
+    def gitRevParse = ["git", "-C", projectDir.toString(), "rev-parse", "--abbrev-ref", "HEAD"].execute()
+    gitRevParse.waitForProcessOutput(gitRevParseOutput, gitRevParseError)
+    def branchName = gitRevParseOutput.toString().trim()
+
+    return makeDevelopmentVersion(["0.0.0", branchName, "SNAPSHOT"])
 }
 
 def reactiveStreamsVersion = '1.0.3'
-def slf4jVersion = '1.7.35'
 def releaseVersion = System.env.RELEASE_VERSION
-def antlrVersion = '4.9.3' // https://mvnrepository.com/artifact/org.antlr/antlr4-runtime
+def antlrVersion = '4.11.1' // https://mvnrepository.com/artifact/org.antlr/antlr4-runtime
+def guavaVersion = '32.1.2-jre'
 version = releaseVersion ? releaseVersion : getDevelopmentVersion()
 group = 'com.graphql-java'
 
@@ -83,34 +99,32 @@ jar {
 }
 
 dependencies {
-    compileOnly 'org.jetbrains:annotations:23.0.0'
+    compileOnly 'org.jetbrains:annotations:26.0.2'
     implementation 'org.antlr:antlr4-runtime:' + antlrVersion
-    implementation 'org.slf4j:slf4j-api:' + slf4jVersion
-    api 'com.graphql-java:java-dataloader:3.2.0'
+    api 'com.graphql-java:java-dataloader:3.4.0'
     api 'org.reactivestreams:reactive-streams:' + reactiveStreamsVersion
     antlr 'org.antlr:antlr4:' + antlrVersion
-    implementation 'com.google.guava:guava:31.0.1-jre'
+    implementation 'com.google.guava:guava:' + guavaVersion
     testImplementation group: 'junit', name: 'junit', version: '4.13.2'
     testImplementation 'org.spockframework:spock-core:2.0-groovy-3.0'
-    testImplementation 'org.codehaus.groovy:groovy:3.0.9'
-    testImplementation 'cglib:cglib-nodep:3.3.0'
-    testImplementation 'org.objenesis:objenesis:3.2'
-    testImplementation 'com.google.code.gson:gson:2.8.9'
-    testImplementation 'org.eclipse.jetty:jetty-server:9.4.26.v20200117'
-    testImplementation 'com.fasterxml.jackson.core:jackson-databind:2.13.1'
-    testImplementation 'org.slf4j:slf4j-simple:' + slf4jVersion
-    testImplementation 'org.awaitility:awaitility-groovy:3.1.6'
-    testImplementation 'com.github.javafaker:javafaker:0.13'
+    testImplementation 'org.codehaus.groovy:groovy:3.0.24'
+    testImplementation 'org.codehaus.groovy:groovy-json:3.0.24'
+    testImplementation 'com.google.code.gson:gson:2.12.1'
+    testImplementation 'org.eclipse.jetty:jetty-server:11.0.24'
+    testImplementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    testImplementation 'org.awaitility:awaitility-groovy:4.2.0'
+    testImplementation 'com.github.javafaker:javafaker:1.0.2'
 
     testImplementation 'org.reactivestreams:reactive-streams-tck:' + reactiveStreamsVersion
     testImplementation "io.reactivex.rxjava2:rxjava:2.2.21"
+    testImplementation "io.projectreactor:reactor-core:3.7.3"
 
-    testImplementation 'org.testng:testng:6.1.1' // use for reactive streams test inheritance
+    testImplementation 'org.testng:testng:7.11.0' // use for reactive streams test inheritance
 
-    testImplementation 'org.openjdk.jmh:jmh-core:1.35'
-    testAnnotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.35'
-    jmh 'org.openjdk.jmh:jmh-core:1.35'
-    jmh 'org.openjdk.jmh:jmh-generator-annprocess:1.35'
+    testImplementation 'org.openjdk.jmh:jmh-core:1.37'
+    testAnnotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
+    jmh 'org.openjdk.jmh:jmh-core:1.37'
+    jmh 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
 }
 
 shadowJar {
@@ -125,7 +139,7 @@ shadowJar {
     }
     relocate('org.antlr.v4.runtime', 'graphql.org.antlr.v4.runtime')
     dependencies {
-        include(dependency('com.google.guava:guava:31.0.1-jre'))
+        include(dependency('com.google.guava:guava:' + guavaVersion))
         include(dependency('org.antlr:antlr4-runtime:' + antlrVersion))
     }
     from "LICENSE.md"
@@ -155,7 +169,7 @@ shadowJar {
     bnd('''
 -exportcontents: graphql.*
 -removeheaders: Private-Package
-Import-Package: !com.google.*,!org.checkerframework.*,!javax.annotation.*,!graphql.com.google.*,!org.antlr.*,!graphql.org.antlr.*,!sun.misc.*,*
+Import-Package: !android.os.*,!com.google.*,!org.checkerframework.*,!javax.annotation.*,!graphql.com.google.*,!org.antlr.*,!graphql.org.antlr.*,!sun.misc.*,*
 ''')
 }
 
@@ -166,6 +180,8 @@ task extractWithoutGuava(type: Copy) {
     }
     into layout.buildDirectory.dir("extract")
 }
+
+extractWithoutGuava.dependsOn jar
 
 task buildNewJar(type: Jar) {
     from layout.buildDirectory.dir("extract")
@@ -179,6 +195,8 @@ task buildNewJar(type: Jar) {
         file("build/libs/graphql-java-tmp.jar").renameTo(file("build/libs/graphql-java-${project.version}.jar"))
     }
 }
+
+buildNewJar.dependsOn extractWithoutGuava
 
 shadowJar.finalizedBy extractWithoutGuava, buildNewJar
 
@@ -199,17 +217,20 @@ generateGrammarSource {
     arguments += ["-visitor"]
     outputDirectory = file("${project.buildDir}/generated-src/antlr/main/graphql/parser/antlr")
 }
-generateGrammarSource.inputs.dir('src/main/antlr')
+generateGrammarSource.inputs
+    .dir('src/main/antlr')
+    .withPropertyName('sourceDir')
+    .withPathSensitivity(PathSensitivity.RELATIVE)
 
 
 task sourcesJar(type: Jar) {
     dependsOn classes
-    classifier 'sources'
+    archiveClassifier = 'sources'
     from sourceSets.main.allSource
 }
 
 task javadocJar(type: Jar, dependsOn: javadoc) {
-    classifier = 'javadoc'
+    archiveClassifier = 'javadoc'
     from javadoc.destinationDir
 }
 
@@ -222,12 +243,40 @@ artifacts {
     archives javadocJar
 }
 
+List<TestDescriptor> failedTests = []
+
 test {
     testLogging {
         events "FAILED", "SKIPPED"
         exceptionFormat = "FULL"
     }
+
+    afterTest { TestDescriptor descriptor, TestResult result ->
+        if (result.getFailedTestCount() > 0) {
+            failedTests.add(descriptor)
+        }
+    }
 }
+
+/*
+ * The gradle.buildFinished callback is deprecated BUT there does not seem to be a decent alternative in gradle 7
+ * So progress over perfection here
+ *
+ * See https://github.com/gradle/gradle/issues/20151
+ */
+gradle.buildFinished {
+    if (!failedTests.isEmpty()) {
+        println "\n\n"
+        println "============================"
+        println "These are the test failures"
+        println "============================"
+        for (td in failedTests) {
+            println "${td.getClassName()}.${td.getDisplayName()}"
+        }
+        println "============================"
+    }
+}
+
 
 allprojects {
     tasks.withType(Javadoc) {
@@ -244,10 +293,10 @@ publishing {
             from components.java
 
             artifact sourcesJar {
-                classifier "sources"
+                archiveClassifier = "sources"
             }
             artifact javadocJar {
-                classifier "javadoc"
+                archiveClassifier = "javadoc"
             }
             pom.withXml {
                 // Removing antlr4 below (introduced in `1ac98bf`) addresses an issue with
@@ -300,8 +349,8 @@ nexusPublishing {
     }
 }
 
-// to publish to local maven repo skip signing: ./gradlew publishToMavenLocal  -x signGraphqlJavaPublication
 signing {
+    required { !project.hasProperty('publishToMavenLocal') }
     def signingKey = System.env.MAVEN_CENTRAL_PGP_KEY
     useInMemoryPgpKeys(signingKey, "")
     sign publishing.publications

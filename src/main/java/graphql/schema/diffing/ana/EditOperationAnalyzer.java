@@ -2,19 +2,24 @@ package graphql.schema.diffing.ana;
 
 import graphql.Assert;
 import graphql.Internal;
+import graphql.VisibleForTesting;
 import graphql.schema.GraphQLSchema;
 import graphql.schema.diffing.Edge;
 import graphql.schema.diffing.EditOperation;
 import graphql.schema.diffing.Mapping;
 import graphql.schema.diffing.SchemaGraph;
 import graphql.schema.diffing.Vertex;
+import graphql.schema.diffing.ana.SchemaDifference.AppliedDirectiveArgumentAddition;
 import graphql.schema.idl.ScalarInfo;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
 
+import static graphql.Assert.assertShouldNeverHappen;
 import static graphql.Assert.assertTrue;
 import static graphql.schema.diffing.ana.SchemaDifference.AppliedDirectiveAddition;
 import static graphql.schema.diffing.ana.SchemaDifference.AppliedDirectiveArgumentDeletion;
@@ -106,19 +111,19 @@ import static graphql.schema.diffing.ana.SchemaDifference.UnionModification;
 @Internal
 public class EditOperationAnalyzer {
 
-    private GraphQLSchema oldSchema;
-    private GraphQLSchema newSchema;
-    private SchemaGraph oldSchemaGraph;
-    private SchemaGraph newSchemaGraph;
+    private final GraphQLSchema oldSchema;
+    private final GraphQLSchema newSchema;
+    private final SchemaGraph oldSchemaGraph;
+    private final SchemaGraph newSchemaGraph;
 
-    private Map<String, ObjectDifference> objectDifferences = new LinkedHashMap<>();
-    private Map<String, InterfaceDifference> interfaceDifferences = new LinkedHashMap<>();
-    private Map<String, UnionDifference> unionDifferences = new LinkedHashMap<>();
-    private Map<String, EnumDifference> enumDifferences = new LinkedHashMap<>();
-    private Map<String, InputObjectDifference> inputObjectDifferences = new LinkedHashMap<>();
-    private Map<String, ScalarDifference> scalarDifferences = new LinkedHashMap<>();
+    private final Map<String, ObjectDifference> objectDifferences = new LinkedHashMap<>();
+    private final Map<String, InterfaceDifference> interfaceDifferences = new LinkedHashMap<>();
+    private final Map<String, UnionDifference> unionDifferences = new LinkedHashMap<>();
+    private final Map<String, EnumDifference> enumDifferences = new LinkedHashMap<>();
+    private final Map<String, InputObjectDifference> inputObjectDifferences = new LinkedHashMap<>();
+    private final Map<String, ScalarDifference> scalarDifferences = new LinkedHashMap<>();
 
-    private Map<String, DirectiveDifference> directiveDifferences = new LinkedHashMap<>();
+    private final Map<String, DirectiveDifference> directiveDifferences = new LinkedHashMap<>();
 
     public EditOperationAnalyzer(GraphQLSchema oldSchema,
                                  GraphQLSchema newSchema,
@@ -132,6 +137,8 @@ public class EditOperationAnalyzer {
     }
 
     public EditOperationAnalysisResult analyzeEdits(List<EditOperation> editOperations, Mapping mapping) {
+        editOperations = getTraversalOrder(editOperations);
+
         handleTypeVertexChanges(editOperations);
 
         for (EditOperation editOperation : editOperations) {
@@ -140,7 +147,7 @@ public class EditOperationAnalyzer {
                     if (editOperation.getTargetVertex().isOfType(SchemaGraph.FIELD)) {
                         fieldChanged(editOperation);
                     } else if (editOperation.getTargetVertex().isOfType(SchemaGraph.ARGUMENT)) {
-                        handleArgumentChange(editOperation);
+                        handleArgumentChange(editOperation, mapping);
                     } else if (editOperation.getTargetVertex().isOfType(SchemaGraph.INPUT_FIELD)) {
                         handleInputFieldChange(editOperation);
                     }
@@ -164,11 +171,13 @@ public class EditOperationAnalyzer {
                     }
             }
         }
+
         handleTypeChanges(editOperations, mapping);
         handleImplementsChanges(editOperations, mapping);
         handleUnionMemberChanges(editOperations, mapping);
         handleEnumValuesChanges(editOperations, mapping);
         handleAppliedDirectives(editOperations, mapping);
+        handleArgumentChanges(editOperations, mapping);
 
         return new EditOperationAnalysisResult(
                 objectDifferences,
@@ -180,9 +189,29 @@ public class EditOperationAnalyzer {
                 directiveDifferences);
     }
 
+    private void handleArgumentChanges(List<EditOperation> editOperations, Mapping mapping) {
+        for (EditOperation editOperation : editOperations) {
+            switch (editOperation.getOperation()) {
+                case INSERT_EDGE:
+                    if (editOperation.getTargetEdge().getTo().isOfType(SchemaGraph.ARGUMENT)) {
+                        argumentAdded(editOperation);
+                    }
+                    break;
+                case DELETE_EDGE:
+                    if (editOperation.getSourceEdge().getTo().isOfType(SchemaGraph.ARGUMENT)) {
+                        argumentDeleted(editOperation);
+                    }
+                    break;
+            }
+        }
+    }
+
 
     private void handleAppliedDirectives(List<EditOperation> editOperations, Mapping mapping) {
 
+        // first the applied directives itself and then all the applied arguments changes
+        // for the applied directives, so that we check for example if the applied directive is
+        // deleted before we check for the applied directive argument changes
         for (EditOperation editOperation : editOperations) {
             switch (editOperation.getOperation()) {
                 case INSERT_VERTEX:
@@ -191,14 +220,30 @@ public class EditOperationAnalyzer {
                     }
                     break;
                 case CHANGE_VERTEX:
+                    // TODO: handle applied directive changes
+                    break;
+                case DELETE_VERTEX:
+                    if (editOperation.getSourceVertex().isOfType(SchemaGraph.APPLIED_DIRECTIVE)) {
+                        appliedDirectiveDeleted(editOperation);
+                    }
+                    break;
+
+            }
+        }
+        for (EditOperation editOperation : editOperations) {
+            switch (editOperation.getOperation()) {
+                case INSERT_VERTEX:
+                    if (editOperation.getTargetVertex().isOfType(SchemaGraph.APPLIED_ARGUMENT)) {
+                        appliedDirectiveArgumentAdded(editOperation);
+                    }
+                    break;
+                case CHANGE_VERTEX:
                     if (editOperation.getTargetVertex().isOfType(SchemaGraph.APPLIED_ARGUMENT)) {
                         appliedDirectiveArgumentChanged(editOperation);
                     }
                     break;
                 case DELETE_VERTEX:
-                    if (editOperation.getSourceVertex().isOfType(SchemaGraph.APPLIED_DIRECTIVE)) {
-                        appliedDirectiveDeleted(editOperation);
-                    } else if (editOperation.getSourceVertex().isOfType(SchemaGraph.APPLIED_ARGUMENT)) {
+                    if (editOperation.getSourceVertex().isOfType(SchemaGraph.APPLIED_ARGUMENT)) {
                         appliedDirectiveArgumentDeleted(editOperation);
                     }
                     break;
@@ -220,7 +265,7 @@ public class EditOperationAnalyzer {
             if (isObjectDeleted(object.getName())) {
                 return;
             }
-            AppliedDirectiveObjectLocation location = new AppliedDirectiveObjectLocation(object.getName());
+            AppliedDirectiveObjectLocation location = new AppliedDirectiveObjectLocation(object.getName(), appliedDirective.getName());
             AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
             getObjectModification(object.getName()).getDetails().add(appliedDirectiveDeletion);
         } else if (container.isOfType(SchemaGraph.INTERFACE)) {
@@ -228,7 +273,7 @@ public class EditOperationAnalyzer {
             if (isInterfaceDeleted(interfaze.getName())) {
                 return;
             }
-            AppliedDirectiveInterfaceLocation location = new AppliedDirectiveInterfaceLocation(interfaze.getName());
+            AppliedDirectiveInterfaceLocation location = new AppliedDirectiveInterfaceLocation(interfaze.getName(), appliedDirective.getName());
             AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
             getInterfaceModification(interfaze.getName()).getDetails().add(appliedDirectiveDeletion);
         } else if (container.isOfType(SchemaGraph.SCALAR)) {
@@ -236,7 +281,7 @@ public class EditOperationAnalyzer {
             if (isScalarDeleted(scalar.getName())) {
                 return;
             }
-            AppliedDirectiveScalarLocation location = new AppliedDirectiveScalarLocation(scalar.getName());
+            AppliedDirectiveScalarLocation location = new AppliedDirectiveScalarLocation(scalar.getName(), appliedDirective.getName());
             AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
             getScalarModification(scalar.getName()).getDetails().add(appliedDirectiveDeletion);
         } else if (container.isOfType(SchemaGraph.ENUM)) {
@@ -244,7 +289,7 @@ public class EditOperationAnalyzer {
             if (isEnumDeleted(enumVertex.getName())) {
                 return;
             }
-            AppliedDirectiveEnumLocation location = new AppliedDirectiveEnumLocation(enumVertex.getName());
+            AppliedDirectiveEnumLocation location = new AppliedDirectiveEnumLocation(enumVertex.getName(), appliedDirective.getName());
             AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
             getEnumModification(enumVertex.getName()).getDetails().add(appliedDirectiveDeletion);
         } else if (container.isOfType(SchemaGraph.ENUM_VALUE)) {
@@ -256,7 +301,7 @@ public class EditOperationAnalyzer {
             if (isEnumValueDeletedFromExistingEnum(enumVertex.getName(), enumValue.getName())) {
                 return;
             }
-            AppliedDirectiveEnumValueLocation location = new AppliedDirectiveEnumValueLocation(enumVertex.getName(), enumValue.getName());
+            AppliedDirectiveEnumValueLocation location = new AppliedDirectiveEnumValueLocation(enumVertex.getName(), enumValue.getName(), appliedDirective.getName());
             AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
             getEnumModification(enumVertex.getName()).getDetails().add(appliedDirectiveDeletion);
         } else if (container.isOfType(SchemaGraph.INPUT_OBJECT)) {
@@ -264,7 +309,7 @@ public class EditOperationAnalyzer {
             if (isInputObjectDeleted(inputObject.getName())) {
                 return;
             }
-            AppliedDirectiveInputObjectLocation location = new AppliedDirectiveInputObjectLocation(inputObject.getName());
+            AppliedDirectiveInputObjectLocation location = new AppliedDirectiveInputObjectLocation(inputObject.getName(), appliedDirective.getName());
             AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
             getInputObjectModification(inputObject.getName()).getDetails().add(appliedDirectiveDeletion);
         } else if (container.isOfType(SchemaGraph.INPUT_FIELD)) {
@@ -276,7 +321,7 @@ public class EditOperationAnalyzer {
             if (isInputFieldDeletedFromExistingInputObject(inputObject.getName(), inputField.getName())) {
                 return;
             }
-            AppliedDirectiveInputObjectFieldLocation location = new AppliedDirectiveInputObjectFieldLocation(inputObject.getName(), inputField.getName());
+            AppliedDirectiveInputObjectFieldLocation location = new AppliedDirectiveInputObjectFieldLocation(inputObject.getName(), inputField.getName(), appliedDirective.getName());
             AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
             getInputObjectModification(inputObject.getName()).getDetails().add(appliedDirectiveDeletion);
         } else if (container.isOfType(SchemaGraph.UNION)) {
@@ -284,7 +329,7 @@ public class EditOperationAnalyzer {
             if (isUnionDeleted(union.getName())) {
                 return;
             }
-            AppliedDirectiveUnionLocation location = new AppliedDirectiveUnionLocation(union.getName());
+            AppliedDirectiveUnionLocation location = new AppliedDirectiveUnionLocation(union.getName(), appliedDirective.getName());
             AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
             getUnionModification(union.getName()).getDetails().add(appliedDirectiveDeletion);
         }
@@ -295,22 +340,366 @@ public class EditOperationAnalyzer {
         Vertex appliedDirective = oldSchemaGraph.getAppliedDirectiveForAppliedArgument(deletedArgument);
         Vertex container = oldSchemaGraph.getAppliedDirectiveContainerForAppliedDirective(appliedDirective);
 
-        if (container.isOfType(SchemaGraph.FIELD)) {
+        if (container.isOfType(SchemaGraph.ARGUMENT)) {
+            Vertex argument = container;
+            Vertex fieldOrDirective = oldSchemaGraph.getFieldOrDirectiveForArgument(argument);
+            if (fieldOrDirective.isOfType(SchemaGraph.FIELD)) {
+                Vertex field = fieldOrDirective;
+                Vertex fieldsContainer = oldSchemaGraph.getFieldsContainerForField(field);
+                if (fieldsContainer.isOfType(SchemaGraph.OBJECT)) {
+                    Vertex object = fieldsContainer;
+                    if (isObjectDeleted(object.getName())) {
+                        return;
+                    }
+                    if (isFieldDeletedFromExistingObject(object.getName(), field.getName())) {
+                        return;
+                    }
+                    if (isArgumentDeletedFromExistingObjectField(object.getName(), field.getName(), argument.getName())) {
+                        return;
+                    }
+                    if (isAppliedDirectiveDeleted(object, appliedDirective.getName())) {
+                        return;
+                    }
+                    AppliedDirectiveObjectFieldArgumentLocation location = new AppliedDirectiveObjectFieldArgumentLocation(object.getName(), field.getName(), argument.getName(), appliedDirective.getName());
+                    getObjectModification(object.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+                } else if (fieldsContainer.isOfType(SchemaGraph.INTERFACE)) {
+                    Vertex interfaze = fieldsContainer;
+                    if (isInterfaceDeleted(interfaze.getName())) {
+                        return;
+                    }
+                    if (isFieldNewForExistingInterface(interfaze.getName(), field.getName())) {
+                        return;
+                    }
+                    if (isArgumentDeletedFromExistingInterfaceField(interfaze.getName(), field.getName(), argument.getName())) {
+                        return;
+                    }
+                    if (isAppliedDirectiveDeleted(interfaze, appliedDirective.getName())) {
+                        return;
+                    }
+                    AppliedDirectiveInterfaceFieldArgumentLocation location = new AppliedDirectiveInterfaceFieldArgumentLocation(interfaze.getName(), field.getName(), argument.getName(), appliedDirective.getName());
+                    getInterfaceModification(interfaze.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+                }
+            } else if (fieldOrDirective.isOfType(SchemaGraph.DIRECTIVE)) {
+                Vertex directive = fieldOrDirective;
+                if (isDirectiveDeleted(directive.getName())) {
+                    return;
+                }
+                if (isArgumentDeletedFromExistingDirective(directive.getName(), argument.getName())) {
+                    return;
+                }
+                if (isAppliedDirectiveDeleted(fieldOrDirective, appliedDirective.getName())) {
+                    return;
+                }
+                AppliedDirectiveDirectiveArgumentLocation location = new AppliedDirectiveDirectiveArgumentLocation(directive.getName(), argument.getName(), appliedDirective.getName());
+                getDirectiveModification(directive.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+            }
+        } else if (container.isOfType(SchemaGraph.FIELD)) {
             Vertex field = container;
             Vertex interfaceOrObjective = oldSchemaGraph.getFieldsContainerForField(field);
             if (interfaceOrObjective.isOfType(SchemaGraph.OBJECT)) {
                 Vertex object = interfaceOrObjective;
-                AppliedDirectiveObjectFieldLocation location = new AppliedDirectiveObjectFieldLocation(object.getName(), field.getName());
+                if (isObjectDeleted(object.getName())) {
+                    return;
+                }
+                if (isFieldDeletedFromExistingObject(object.getName(), field.getName())) {
+                    return;
+                }
+                if (isAppliedDirectiveDeleted(object, appliedDirective.getName())) {
+                    return;
+                }
+
+                AppliedDirectiveObjectFieldLocation location = new AppliedDirectiveObjectFieldLocation(object.getName(), field.getName(), appliedDirective.getName());
                 getObjectModification(object.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
             } else {
                 assertTrue(interfaceOrObjective.isOfType(SchemaGraph.INTERFACE));
                 Vertex interfaze = interfaceOrObjective;
-                AppliedDirectiveInterfaceFieldLocation location = new AppliedDirectiveInterfaceFieldLocation(interfaze.getName(), field.getName());
+                if (isInterfaceDeleted(interfaze.getName())) {
+                    return;
+                }
+                if (isFieldDeletedFromExistingInterface(interfaze.getName(), field.getName())) {
+                    return;
+                }
+                if (isAppliedDirectiveDeleted(interfaze, appliedDirective.getName())) {
+                    return;
+                }
+
+                AppliedDirectiveInterfaceFieldLocation location = new AppliedDirectiveInterfaceFieldLocation(interfaze.getName(), field.getName(), appliedDirective.getName());
                 getInterfaceModification(interfaze.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
             }
-        }
+        } else if (container.isOfType(SchemaGraph.SCALAR)) {
+            Vertex scalar = container;
+            if (isScalarDeleted(scalar.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveDeleted(scalar, appliedDirective.getName())) {
+                return;
+            }
 
+            AppliedDirectiveScalarLocation location = new AppliedDirectiveScalarLocation(scalar.getName(), appliedDirective.getName());
+            getScalarModification(scalar.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.ENUM)) {
+            Vertex enumVertex = container;
+            if (isEnumDeleted(enumVertex.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveDeleted(enumVertex, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveEnumLocation location = new AppliedDirectiveEnumLocation(enumVertex.getName(), appliedDirective.getName());
+            getEnumModification(enumVertex.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.ENUM_VALUE)) {
+            Vertex enumValue = container;
+            Vertex enumVertex = oldSchemaGraph.getEnumForEnumValue(enumValue);
+            if (isEnumDeleted(enumVertex.getName())) {
+                return;
+            }
+            if (isNewEnumValueForExistingEnum(enumVertex.getName(), enumValue.getName())) {
+                return;
+            }
+            AppliedDirectiveEnumValueLocation location = new AppliedDirectiveEnumValueLocation(enumVertex.getName(), enumValue.getName(), appliedDirective.getName());
+            getEnumModification(enumVertex.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.UNION)) {
+            Vertex union = container;
+            if (isUnionDeleted(union.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveDeleted(union, appliedDirective.getName())) {
+                return;
+            }
+
+            AppliedDirectiveUnionLocation location = new AppliedDirectiveUnionLocation(union.getName(), appliedDirective.getName());
+            getUnionModification(union.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.OBJECT)) {
+            Vertex object = container;
+            if (isObjectDeleted(object.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveDeleted(object, appliedDirective.getName())) {
+                return;
+            }
+
+            AppliedDirectiveObjectLocation location = new AppliedDirectiveObjectLocation(object.getName(), appliedDirective.getName());
+            getObjectModification(object.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.INTERFACE)) {
+            Vertex interfaze = container;
+            if (isInterfaceDeleted(interfaze.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveDeleted(interfaze, appliedDirective.getName())) {
+                return;
+            }
+
+            AppliedDirectiveInterfaceLocation location = new AppliedDirectiveInterfaceLocation(interfaze.getName(), appliedDirective.getName());
+            getInterfaceModification(interfaze.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.INPUT_OBJECT)) {
+            Vertex inputObject = container;
+            if (isInputObjectDeleted(inputObject.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveDeleted(inputObject, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveInputObjectLocation location = new AppliedDirectiveInputObjectLocation(inputObject.getName(), appliedDirective.getName());
+            getInputObjectModification(inputObject.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.INPUT_FIELD)) {
+            Vertex inputField = container;
+            Vertex inputObject = oldSchemaGraph.getInputObjectForInputField(inputField);
+            if (isInputObjectDeleted(inputObject.getName())) {
+                return;
+            }
+            if (isNewInputFieldExistingInputObject(inputObject.getName(), inputField.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveDeleted(inputField, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveInputObjectFieldLocation location = new AppliedDirectiveInputObjectFieldLocation(inputObject.getName(), inputField.getName(), appliedDirective.getName());
+            getInputObjectModification(inputObject.getName()).getDetails().add(new AppliedDirectiveArgumentDeletion(location, deletedArgument.getName()));
+        } else {
+            assertShouldNeverHappen("Unexpected container " + container);
+        }
     }
+
+    private void appliedDirectiveArgumentAdded(EditOperation editOperation) {
+        Vertex addedArgument = editOperation.getTargetVertex();
+        Vertex appliedDirective = newSchemaGraph.getAppliedDirectiveForAppliedArgument(addedArgument);
+        Vertex container = newSchemaGraph.getAppliedDirectiveContainerForAppliedDirective(appliedDirective);
+
+        if (container.isOfType(SchemaGraph.ARGUMENT)) {
+            Vertex argument = container;
+            Vertex fieldOrDirective = newSchemaGraph.getFieldOrDirectiveForArgument(argument);
+            if (fieldOrDirective.isOfType(SchemaGraph.FIELD)) {
+                Vertex field = fieldOrDirective;
+                Vertex fieldsContainer = newSchemaGraph.getFieldsContainerForField(field);
+                if (fieldsContainer.isOfType(SchemaGraph.OBJECT)) {
+                    Vertex object = fieldsContainer;
+                    if (isObjectAdded(object.getName())) {
+                        return;
+                    }
+                    if (isFieldNewForExistingObject(object.getName(), field.getName())) {
+                        return;
+                    }
+                    if (isArgumentNewForExistingObjectField(object.getName(), field.getName(), argument.getName())) {
+                        return;
+                    }
+                    if (isAppliedDirectiveAdded(object, appliedDirective.getName())) {
+                        return;
+                    }
+                    AppliedDirectiveObjectFieldArgumentLocation location = new AppliedDirectiveObjectFieldArgumentLocation(object.getName(), field.getName(), argument.getName(), appliedDirective.getName());
+                    getObjectModification(object.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+                } else if (fieldsContainer.isOfType(SchemaGraph.INTERFACE)) {
+                    Vertex interfaze = fieldsContainer;
+                    if (isInterfaceAdded(interfaze.getName())) {
+                        return;
+                    }
+                    if (isFieldNewForExistingInterface(interfaze.getName(), field.getName())) {
+                        return;
+                    }
+                    if (isArgumentNewForExistingInterfaceField(interfaze.getName(), field.getName(), argument.getName())) {
+                        return;
+                    }
+
+                    if (isAppliedDirectiveAdded(interfaze, appliedDirective.getName())) {
+                        return;
+                    }
+                    AppliedDirectiveInterfaceFieldArgumentLocation location = new AppliedDirectiveInterfaceFieldArgumentLocation(interfaze.getName(), field.getName(), argument.getName(), appliedDirective.getName());
+                    getInterfaceModification(interfaze.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+                }
+            } else if (fieldOrDirective.isOfType(SchemaGraph.DIRECTIVE)) {
+                Vertex directive = fieldOrDirective;
+                if (isAppliedDirectiveAdded(directive, appliedDirective.getName())) {
+                    return;
+                }
+                AppliedDirectiveDirectiveArgumentLocation location = new AppliedDirectiveDirectiveArgumentLocation(directive.getName(), argument.getName(), appliedDirective.getName());
+                getDirectiveModification(directive.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+            }
+        } else if (container.isOfType(SchemaGraph.FIELD)) {
+            Vertex field = container;
+            Vertex interfaceOrObjective = newSchemaGraph.getFieldsContainerForField(field);
+            if (interfaceOrObjective.isOfType(SchemaGraph.OBJECT)) {
+                Vertex object = interfaceOrObjective;
+                if (isObjectAdded(object.getName())) {
+                    return;
+                }
+                if (isFieldNewForExistingObject(object.getName(), field.getName())) {
+                    return;
+                }
+                if (isAppliedDirectiveAdded(container, appliedDirective.getName())) {
+                    return;
+                }
+
+                AppliedDirectiveObjectFieldLocation location = new AppliedDirectiveObjectFieldLocation(object.getName(), field.getName(), appliedDirective.getName());
+                getObjectModification(object.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+            } else if (interfaceOrObjective.isOfType(SchemaGraph.INTERFACE)) {
+                Vertex interfaze = interfaceOrObjective;
+                if (isInterfaceAdded(interfaze.getName())) {
+                    return;
+                }
+                if (isFieldNewForExistingInterface(interfaze.getName(), field.getName())) {
+                    return;
+                }
+                if (isAppliedDirectiveAdded(container, appliedDirective.getName())) {
+                    return;
+                }
+
+                AppliedDirectiveInterfaceFieldLocation location = new AppliedDirectiveInterfaceFieldLocation(interfaze.getName(), field.getName(), appliedDirective.getName());
+                getInterfaceModification(interfaze.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+            } else {
+                assertShouldNeverHappen("Unexpected field container " + interfaceOrObjective);
+            }
+        } else if (container.isOfType(SchemaGraph.SCALAR)) {
+            Vertex scalar = container;
+            if (isScalarAdded(scalar.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveAdded(container, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveScalarLocation location = new AppliedDirectiveScalarLocation(scalar.getName(), appliedDirective.getName());
+            getScalarModification(scalar.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.ENUM)) {
+            Vertex enumVertex = container;
+            if (isEnumAdded(enumVertex.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveAdded(container, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveEnumLocation location = new AppliedDirectiveEnumLocation(enumVertex.getName(), appliedDirective.getName());
+            getEnumModification(enumVertex.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.ENUM_VALUE)) {
+            Vertex enumValue = container;
+            Vertex enumVertex = newSchemaGraph.getEnumForEnumValue(enumValue);
+            if (isEnumAdded(enumVertex.getName())) {
+                return;
+            }
+            if (isNewEnumValueForExistingEnum(enumVertex.getName(), enumValue.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveAdded(container, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveEnumValueLocation location = new AppliedDirectiveEnumValueLocation(enumVertex.getName(), enumValue.getName(), appliedDirective.getName());
+            getEnumModification(enumVertex.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.UNION)) {
+            Vertex union = container;
+            if (isUnionAdded(union.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveAdded(container, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveUnionLocation location = new AppliedDirectiveUnionLocation(union.getName(), appliedDirective.getName());
+            getUnionModification(union.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.INTERFACE)) {
+            Vertex interfaze = container;
+            if (isInterfaceAdded(interfaze.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveAdded(container, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveInterfaceLocation location = new AppliedDirectiveInterfaceLocation(interfaze.getName(), appliedDirective.getName());
+            getInterfaceModification(interfaze.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.OBJECT)) {
+            Vertex interfaze = container;
+            if (isObjectAdded(interfaze.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveAdded(container, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveObjectLocation location = new AppliedDirectiveObjectLocation(interfaze.getName(), appliedDirective.getName());
+            getObjectModification(interfaze.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.INPUT_OBJECT)) {
+            Vertex inputObject = container;
+            if (isInputObjectAdded(inputObject.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveAdded(container, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveInputObjectLocation location = new AppliedDirectiveInputObjectLocation(inputObject.getName(), appliedDirective.getName());
+            getInputObjectModification(inputObject.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+        } else if (container.isOfType(SchemaGraph.INPUT_FIELD)) {
+            Vertex inputField = container;
+            Vertex inputObject = newSchemaGraph.getInputObjectForInputField(inputField);
+            if (isInputObjectAdded(inputObject.getName())) {
+                return;
+            }
+            if (isNewInputFieldExistingInputObject(inputObject.getName(), inputField.getName())) {
+                return;
+            }
+            if (isAppliedDirectiveAdded(container, appliedDirective.getName())) {
+                return;
+            }
+            AppliedDirectiveInputObjectFieldLocation location = new AppliedDirectiveInputObjectFieldLocation(inputObject.getName(), inputField.getName(), appliedDirective.getName());
+            getInputObjectModification(inputObject.getName()).getDetails().add(new AppliedDirectiveArgumentAddition(location, addedArgument.getName()));
+        } else {
+            assertShouldNeverHappen("Unexpected applied argument container " + container);
+        }
+    }
+
 
     private void appliedDirectiveArgumentChanged(EditOperation editOperation) {
         Vertex appliedArgument = editOperation.getTargetVertex();
@@ -330,7 +719,7 @@ public class EditOperationAnalyzer {
             Vertex interfaceOrObjective = newSchemaGraph.getFieldsContainerForField(field);
             if (interfaceOrObjective.isOfType(SchemaGraph.OBJECT)) {
                 Vertex object = interfaceOrObjective;
-                AppliedDirectiveObjectFieldLocation location = new AppliedDirectiveObjectFieldLocation(object.getName(), field.getName());
+                AppliedDirectiveObjectFieldLocation location = new AppliedDirectiveObjectFieldLocation(object.getName(), field.getName(), appliedDirective.getName());
                 if (valueChanged) {
                     AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
                     getObjectModification(object.getName()).getDetails().add(argumentValueModification);
@@ -339,7 +728,142 @@ public class EditOperationAnalyzer {
                     AppliedDirectiveArgumentRename argumentRename = new AppliedDirectiveArgumentRename(location, oldArgumentName, newArgumentName);
                     getObjectModification(object.getName()).getDetails().add(argumentRename);
                 }
+            } else if (interfaceOrObjective.isOfType(SchemaGraph.INTERFACE)) {
+                Vertex interfaze = interfaceOrObjective;
+                AppliedDirectiveInterfaceFieldLocation location = new AppliedDirectiveInterfaceFieldLocation(interfaze.getName(), field.getName(), appliedDirective.getName());
+                if (valueChanged) {
+                    AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                    getInterfaceModification(interfaze.getName()).getDetails().add(argumentValueModification);
+                }
+                if (nameChanged) {
+
+                }
             }
+        } else if (container.isOfType(SchemaGraph.ARGUMENT)) {
+            Vertex argument = container;
+            Vertex fieldOrDirective = newSchemaGraph.getFieldOrDirectiveForArgument(argument);
+            if (fieldOrDirective.isOfType(SchemaGraph.FIELD)) {
+                Vertex field = fieldOrDirective;
+                Vertex fieldsContainer = newSchemaGraph.getFieldsContainerForField(field);
+                if (fieldsContainer.isOfType(SchemaGraph.OBJECT)) {
+                    Vertex object = fieldsContainer;
+                    AppliedDirectiveObjectFieldArgumentLocation location = new AppliedDirectiveObjectFieldArgumentLocation(object.getName(), field.getName(), argument.getName(), appliedDirective.getName());
+
+                    if (valueChanged) {
+                        AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                        getObjectModification(object.getName()).getDetails().add(argumentValueModification);
+                    }
+                    if (nameChanged) {
+
+                    }
+                } else if (fieldsContainer.isOfType(SchemaGraph.INTERFACE)) {
+                    Vertex interfaze = fieldsContainer;
+                    AppliedDirectiveInterfaceFieldArgumentLocation location = new AppliedDirectiveInterfaceFieldArgumentLocation(interfaze.getName(), field.getName(), argument.getName(), appliedDirective.getName());
+
+                    if (valueChanged) {
+                        AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                        getInterfaceModification(interfaze.getName()).getDetails().add(argumentValueModification);
+                    }
+                    if (nameChanged) {
+
+                    }
+                }
+            } else if (fieldOrDirective.isOfType(SchemaGraph.DIRECTIVE)) {
+                Vertex directive = fieldOrDirective;
+                AppliedDirectiveDirectiveArgumentLocation location = new AppliedDirectiveDirectiveArgumentLocation(directive.getName(), argument.getName(), appliedDirective.getName());
+                if (valueChanged) {
+                    AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                    getDirectiveModification(directive.getName()).getDetails().add(argumentValueModification);
+                }
+
+            }
+        } else if (container.isOfType(SchemaGraph.INPUT_FIELD)) {
+            Vertex inputField = container;
+            Vertex inputObject = newSchemaGraph.getInputObjectForInputField(inputField);
+            AppliedDirectiveInputObjectFieldLocation location = new AppliedDirectiveInputObjectFieldLocation(inputObject.getName(), inputField.getName(), appliedDirective.getName());
+            if (valueChanged) {
+                AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                getInputObjectModification(inputObject.getName()).getDetails().add(argumentValueModification);
+            }
+            if (nameChanged) {
+//                AppliedDirectiveArgumentRename argumentRename = new AppliedDirectiveArgumentRename(location, oldArgumentName, newArgumentName);
+//                getInputObjectModification(inputObject.getName()).getDetails().add(argumentRename);
+            }
+        } else if (container.isOfType(SchemaGraph.OBJECT)) {
+            Vertex object = container;
+            AppliedDirectiveObjectLocation location = new AppliedDirectiveObjectLocation(object.getName(), appliedDirective.getName());
+            if (valueChanged) {
+                AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                getObjectModification(object.getName()).getDetails().add(argumentValueModification);
+            }
+            if (nameChanged) {
+            }
+        } else if (container.isOfType(SchemaGraph.INTERFACE)) {
+            Vertex interfaze = container;
+            AppliedDirectiveInterfaceLocation location = new AppliedDirectiveInterfaceLocation(interfaze.getName(), appliedDirective.getName());
+            if (valueChanged) {
+                AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                getInterfaceModification(interfaze.getName()).getDetails().add(argumentValueModification);
+            }
+            if (nameChanged) {
+
+            }
+
+        } else if (container.isOfType(SchemaGraph.INPUT_OBJECT)) {
+            Vertex inputObject = container;
+            AppliedDirectiveInputObjectLocation location = new AppliedDirectiveInputObjectLocation(inputObject.getName(), appliedDirective.getName());
+            if (valueChanged) {
+                AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                getInputObjectModification(inputObject.getName()).getDetails().add(argumentValueModification);
+            }
+            if (nameChanged) {
+
+            }
+
+        } else if (container.isOfType(SchemaGraph.ENUM)) {
+            Vertex enumVertex = container;
+            AppliedDirectiveEnumLocation location = new AppliedDirectiveEnumLocation(enumVertex.getName(), appliedDirective.getName());
+            if (valueChanged) {
+                AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                getEnumModification(enumVertex.getName()).getDetails().add(argumentValueModification);
+            }
+            if (nameChanged) {
+
+            }
+        } else if (container.isOfType(SchemaGraph.ENUM_VALUE)) {
+            Vertex enumValue = container;
+            Vertex enumVertex = newSchemaGraph.getEnumForEnumValue(enumValue);
+            AppliedDirectiveEnumValueLocation location = new AppliedDirectiveEnumValueLocation(enumVertex.getName(), enumValue.getName(), appliedDirective.getName());
+            if (valueChanged) {
+                AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                getEnumModification(enumVertex.getName()).getDetails().add(argumentValueModification);
+            }
+            if (nameChanged) {
+
+            }
+
+        } else if (container.isOfType(SchemaGraph.UNION)) {
+            Vertex union = container;
+            AppliedDirectiveUnionLocation location = new AppliedDirectiveUnionLocation(union.getName(), appliedDirective.getName());
+            if (valueChanged) {
+                AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                getUnionModification(union.getName()).getDetails().add(argumentValueModification);
+            }
+            if (nameChanged) {
+
+            }
+        } else if (container.isOfType(SchemaGraph.SCALAR)) {
+            Vertex scalar = container;
+            AppliedDirectiveScalarLocation location = new AppliedDirectiveScalarLocation(scalar.getName(), appliedDirective.getName());
+            if (valueChanged) {
+                AppliedDirectiveArgumentValueModification argumentValueModification = new AppliedDirectiveArgumentValueModification(location, newArgumentName, oldValue, newValue);
+                getScalarModification(scalar.getName()).getDetails().add(argumentValueModification);
+            }
+            if (nameChanged) {
+
+            }
+        } else {
+            assertShouldNeverHappen("Unexpected applied argument container " + container);
         }
     }
 
@@ -356,7 +880,7 @@ public class EditOperationAnalyzer {
             if (isObjectAdded(object.getName())) {
                 return;
             }
-            AppliedDirectiveObjectLocation location = new AppliedDirectiveObjectLocation(object.getName());
+            AppliedDirectiveObjectLocation location = new AppliedDirectiveObjectLocation(object.getName(), appliedDirective.getName());
             AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
             getObjectModification(object.getName()).getDetails().add(appliedDirectiveAddition);
         } else if (container.isOfType(SchemaGraph.INTERFACE)) {
@@ -364,7 +888,7 @@ public class EditOperationAnalyzer {
             if (isInterfaceAdded(interfaze.getName())) {
                 return;
             }
-            AppliedDirectiveInterfaceLocation location = new AppliedDirectiveInterfaceLocation(interfaze.getName());
+            AppliedDirectiveInterfaceLocation location = new AppliedDirectiveInterfaceLocation(interfaze.getName(), appliedDirective.getName());
             AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
             getInterfaceModification(interfaze.getName()).getDetails().add(appliedDirectiveAddition);
         } else if (container.isOfType(SchemaGraph.SCALAR)) {
@@ -372,7 +896,7 @@ public class EditOperationAnalyzer {
             if (isScalarAdded(scalar.getName())) {
                 return;
             }
-            AppliedDirectiveScalarLocation location = new AppliedDirectiveScalarLocation(scalar.getName());
+            AppliedDirectiveScalarLocation location = new AppliedDirectiveScalarLocation(scalar.getName(), appliedDirective.getName());
             AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
             getScalarModification(scalar.getName()).getDetails().add(appliedDirectiveAddition);
         } else if (container.isOfType(SchemaGraph.ENUM)) {
@@ -380,7 +904,7 @@ public class EditOperationAnalyzer {
             if (isEnumAdded(enumVertex.getName())) {
                 return;
             }
-            AppliedDirectiveEnumLocation location = new AppliedDirectiveEnumLocation(enumVertex.getName());
+            AppliedDirectiveEnumLocation location = new AppliedDirectiveEnumLocation(enumVertex.getName(), appliedDirective.getName());
             AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
             getEnumModification(enumVertex.getName()).getDetails().add(appliedDirectiveAddition);
         } else if (container.isOfType(SchemaGraph.ENUM_VALUE)) {
@@ -392,7 +916,7 @@ public class EditOperationAnalyzer {
             if (isNewEnumValueForExistingEnum(enumVertex.getName(), enumValue.getName())) {
                 return;
             }
-            AppliedDirectiveEnumValueLocation location = new AppliedDirectiveEnumValueLocation(enumVertex.getName(), enumValue.getName());
+            AppliedDirectiveEnumValueLocation location = new AppliedDirectiveEnumValueLocation(enumVertex.getName(), enumValue.getName(), appliedDirective.getName());
             AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
             getEnumModification(enumVertex.getName()).getDetails().add(appliedDirectiveAddition);
         } else if (container.isOfType(SchemaGraph.INPUT_OBJECT)) {
@@ -400,7 +924,7 @@ public class EditOperationAnalyzer {
             if (isInputObjectAdded(inputObject.getName())) {
                 return;
             }
-            AppliedDirectiveInputObjectLocation location = new AppliedDirectiveInputObjectLocation(inputObject.getName());
+            AppliedDirectiveInputObjectLocation location = new AppliedDirectiveInputObjectLocation(inputObject.getName(), appliedDirective.getName());
             AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
             getInputObjectModification(inputObject.getName()).getDetails().add(appliedDirectiveAddition);
         } else if (container.isOfType(SchemaGraph.INPUT_FIELD)) {
@@ -412,7 +936,7 @@ public class EditOperationAnalyzer {
             if (isNewInputFieldExistingInputObject(inputObject.getName(), inputField.getName())) {
                 return;
             }
-            AppliedDirectiveInputObjectFieldLocation location = new AppliedDirectiveInputObjectFieldLocation(inputObject.getName(), inputField.getName());
+            AppliedDirectiveInputObjectFieldLocation location = new AppliedDirectiveInputObjectFieldLocation(inputObject.getName(), inputField.getName(), appliedDirective.getName());
             AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
             getInputObjectModification(inputObject.getName()).getDetails().add(appliedDirectiveAddition);
         } else if (container.isOfType(SchemaGraph.UNION)) {
@@ -420,7 +944,7 @@ public class EditOperationAnalyzer {
             if (isUnionAdded(union.getName())) {
                 return;
             }
-            AppliedDirectiveUnionLocation location = new AppliedDirectiveUnionLocation(union.getName());
+            AppliedDirectiveUnionLocation location = new AppliedDirectiveUnionLocation(union.getName(), appliedDirective.getName());
             AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
             getUnionModification(union.getName()).getDetails().add(appliedDirectiveAddition);
         }
@@ -438,7 +962,7 @@ public class EditOperationAnalyzer {
             if (isFieldDeletedFromExistingObject(object.getName(), field.getName())) {
                 return;
             }
-            AppliedDirectiveObjectFieldLocation location = new AppliedDirectiveObjectFieldLocation(object.getName(), field.getName());
+            AppliedDirectiveObjectFieldLocation location = new AppliedDirectiveObjectFieldLocation(object.getName(), field.getName(), appliedDirective.getName());
             AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
             getObjectModification(object.getName()).getDetails().add(appliedDirectiveDeletion);
         }
@@ -456,7 +980,7 @@ public class EditOperationAnalyzer {
             if (isFieldNewForExistingObject(object.getName(), field.getName())) {
                 return;
             }
-            AppliedDirectiveObjectFieldLocation location = new AppliedDirectiveObjectFieldLocation(object.getName(), field.getName());
+            AppliedDirectiveObjectFieldLocation location = new AppliedDirectiveObjectFieldLocation(object.getName(), field.getName(), appliedDirective.getName());
             AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
             getObjectModification(object.getName()).getDetails().add(appliedDirectiveAddition);
         }
@@ -479,7 +1003,7 @@ public class EditOperationAnalyzer {
                 if (isArgumentDeletedFromExistingObjectField(object.getName(), field.getName(), argument.getName())) {
                     return;
                 }
-                AppliedDirectiveObjectFieldArgumentLocation location = new AppliedDirectiveObjectFieldArgumentLocation(object.getName(), field.getName(), argument.getName());
+                AppliedDirectiveObjectFieldArgumentLocation location = new AppliedDirectiveObjectFieldArgumentLocation(object.getName(), field.getName(), argument.getName(), appliedDirective.getName());
                 AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
                 getObjectModification(object.getName()).getDetails().add(appliedDirectiveDeletion);
             } else {
@@ -494,7 +1018,7 @@ public class EditOperationAnalyzer {
                 if (isArgumentDeletedFromExistingInterfaceField(interfaze.getName(), field.getName(), argument.getName())) {
                     return;
                 }
-                AppliedDirectiveInterfaceFieldArgumentLocation location = new AppliedDirectiveInterfaceFieldArgumentLocation(interfaze.getName(), field.getName(), argument.getName());
+                AppliedDirectiveInterfaceFieldArgumentLocation location = new AppliedDirectiveInterfaceFieldArgumentLocation(interfaze.getName(), field.getName(), argument.getName(), appliedDirective.getName());
                 AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
                 getInterfaceModification(interfaze.getName()).getDetails().add(appliedDirectiveDeletion);
             }
@@ -507,7 +1031,7 @@ public class EditOperationAnalyzer {
             if (isArgumentDeletedFromExistingDirective(directive.getName(), argument.getName())) {
                 return;
             }
-            AppliedDirectiveDirectiveArgumentLocation location = new AppliedDirectiveDirectiveArgumentLocation(directive.getName(), argument.getName());
+            AppliedDirectiveDirectiveArgumentLocation location = new AppliedDirectiveDirectiveArgumentLocation(directive.getName(), argument.getName(), appliedDirective.getName());
             AppliedDirectiveDeletion appliedDirectiveDeletion = new AppliedDirectiveDeletion(location, appliedDirective.getName());
             getDirectiveModification(directive.getName()).getDetails().add(appliedDirectiveDeletion);
         }
@@ -530,7 +1054,7 @@ public class EditOperationAnalyzer {
                 if (isArgumentNewForExistingObjectField(object.getName(), field.getName(), argument.getName())) {
                     return;
                 }
-                AppliedDirectiveObjectFieldArgumentLocation location = new AppliedDirectiveObjectFieldArgumentLocation(object.getName(), field.getName(), argument.getName());
+                AppliedDirectiveObjectFieldArgumentLocation location = new AppliedDirectiveObjectFieldArgumentLocation(object.getName(), field.getName(), argument.getName(), appliedDirective.getName());
                 AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
                 getObjectModification(object.getName()).getDetails().add(appliedDirectiveAddition);
             } else {
@@ -545,7 +1069,7 @@ public class EditOperationAnalyzer {
                 if (isArgumentNewForExistingInterfaceField(interfaze.getName(), field.getName(), argument.getName())) {
                     return;
                 }
-                AppliedDirectiveInterfaceFieldArgumentLocation location = new AppliedDirectiveInterfaceFieldArgumentLocation(interfaze.getName(), field.getName(), argument.getName());
+                AppliedDirectiveInterfaceFieldArgumentLocation location = new AppliedDirectiveInterfaceFieldArgumentLocation(interfaze.getName(), field.getName(), argument.getName(), appliedDirective.getName());
                 AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
                 getInterfaceModification(interfaze.getName()).getDetails().add(appliedDirectiveAddition);
             }
@@ -558,7 +1082,7 @@ public class EditOperationAnalyzer {
             if (isArgumentNewForExistingDirective(directive.getName(), argument.getName())) {
                 return;
             }
-            AppliedDirectiveDirectiveArgumentLocation location = new AppliedDirectiveDirectiveArgumentLocation(directive.getName(), argument.getName());
+            AppliedDirectiveDirectiveArgumentLocation location = new AppliedDirectiveDirectiveArgumentLocation(directive.getName(), argument.getName(), appliedDirective.getName());
             AppliedDirectiveAddition appliedDirectiveAddition = new AppliedDirectiveAddition(location, appliedDirective.getName());
             getDirectiveModification(directive.getName()).getDetails().add(appliedDirectiveAddition);
         }
@@ -575,7 +1099,7 @@ public class EditOperationAnalyzer {
                     break;
                 case CHANGE_EDGE:
                     if (newEdge.getLabel().startsWith("type=")) {
-                        typeEdgeChanged(editOperation);
+                        typeEdgeChanged(editOperation, mapping);
                     }
                     break;
             }
@@ -628,21 +1152,43 @@ public class EditOperationAnalyzer {
     private void handleInputFieldChange(EditOperation editOperation) {
         Vertex inputField = editOperation.getTargetVertex();
         Vertex inputObject = newSchemaGraph.getInputObjectForInputField(inputField);
+
         String oldName = editOperation.getSourceVertex().getName();
-        String newName = inputObject.getName();
-        getInputObjectModification(newName).getDetails().add(new InputObjectFieldRename(oldName, inputField.getName()));
+        String newName = inputField.getName();
+
+        if (oldName.equals(newName)) {
+            // Something else like description could have changed
+            return;
+        }
+
+        if (isInputObjectAdded(inputObject.getName())) {
+            return;
+        }
+
+        getInputObjectModification(inputObject.getName()).getDetails().add(new InputObjectFieldRename(oldName, newName));
     }
 
-    private void handleArgumentChange(EditOperation editOperation) {
+    private void handleArgumentChange(EditOperation editOperation, Mapping mapping) {
+        Vertex oldArgument = editOperation.getSourceVertex();
         Vertex argument = editOperation.getTargetVertex();
+
+        String oldName = oldArgument.getName();
+        String newName = argument.getName();
+
+        if (oldName.equals(newName)) {
+            // Something else like description could have changed
+            return;
+        }
+
+        if (!doesArgumentChangeMakeSense(oldArgument, argument, mapping)) {
+            return;
+        }
+
         Vertex fieldOrDirective = newSchemaGraph.getFieldOrDirectiveForArgument(argument);
         if (fieldOrDirective.isOfType(SchemaGraph.DIRECTIVE)) {
             Vertex directive = fieldOrDirective;
             DirectiveModification directiveModification = getDirectiveModification(directive.getName());
-            String oldName = editOperation.getSourceVertex().getName();
-            String newName = argument.getName();
             directiveModification.getDetails().add(new DirectiveArgumentRename(oldName, newName));
-
         } else {
             assertTrue(fieldOrDirective.isOfType(SchemaGraph.FIELD));
             Vertex field = fieldOrDirective;
@@ -651,17 +1197,12 @@ public class EditOperationAnalyzer {
             if (fieldsContainerForField.isOfType(SchemaGraph.OBJECT)) {
                 Vertex object = fieldsContainerForField;
                 ObjectModification objectModification = getObjectModification(object.getName());
-                String oldName = editOperation.getSourceVertex().getName();
-                String newName = argument.getName();
                 objectModification.getDetails().add(new ObjectFieldArgumentRename(fieldName, oldName, newName));
             } else {
                 assertTrue(fieldsContainerForField.isOfType(SchemaGraph.INTERFACE));
                 Vertex interfaze = fieldsContainerForField;
                 InterfaceModification interfaceModification = getInterfaceModification(interfaze.getName());
-                String oldName = editOperation.getSourceVertex().getName();
-                String newName = argument.getName();
                 interfaceModification.getDetails().add(new InterfaceFieldArgumentRename(fieldName, oldName, newName));
-
             }
         }
     }
@@ -740,18 +1281,32 @@ public class EditOperationAnalyzer {
     private void fieldChanged(EditOperation editOperation) {
         Vertex field = editOperation.getTargetVertex();
         Vertex fieldsContainerForField = newSchemaGraph.getFieldsContainerForField(field);
+
+        String oldName = editOperation.getSourceVertex().getName();
+        String newName = field.getName();
+        if (oldName.equals(newName)) {
+            // Something else like description could have changed
+            return;
+        }
+
         if (fieldsContainerForField.isOfType(SchemaGraph.OBJECT)) {
             Vertex object = fieldsContainerForField;
+
+            if (isObjectAdded(object.getName())) {
+                return;
+            }
+
             ObjectModification objectModification = getObjectModification(object.getName());
-            String oldName = editOperation.getSourceVertex().getName();
-            String newName = field.getName();
             objectModification.getDetails().add(new ObjectFieldRename(oldName, newName));
         } else {
             assertTrue(fieldsContainerForField.isOfType(SchemaGraph.INTERFACE));
             Vertex interfaze = fieldsContainerForField;
+
+            if (isInterfaceAdded(interfaze.getName())) {
+                return;
+            }
+
             InterfaceModification interfaceModification = getInterfaceModification(interfaze.getName());
-            String oldName = editOperation.getSourceVertex().getName();
-            String newName = field.getName();
             interfaceModification.getDetails().add(new InterfaceFieldRename(oldName, newName));
         }
     }
@@ -915,7 +1470,6 @@ public class EditOperationAnalyzer {
                 changedDirective(editOperation);
                 break;
         }
-
     }
 
 
@@ -933,8 +1487,9 @@ public class EditOperationAnalyzer {
 
     }
 
-    private void typeEdgeInsertedForInputField(EditOperation
-                                                       editOperation, List<EditOperation> editOperations, Mapping mapping) {
+    private void typeEdgeInsertedForInputField(EditOperation editOperation,
+                                               List<EditOperation> editOperations,
+                                               Mapping mapping) {
         Vertex inputField = editOperation.getTargetEdge().getFrom();
         Vertex inputObject = newSchemaGraph.getInputObjectForInputField(inputField);
         if (isInputObjectAdded(inputObject.getName())) {
@@ -950,8 +1505,9 @@ public class EditOperationAnalyzer {
         getInputObjectModification(inputObject.getName()).getDetails().add(inputObjectFieldTypeModification);
     }
 
-    private void typeEdgeInsertedForArgument(EditOperation
-                                                     editOperation, List<EditOperation> editOperations, Mapping mapping) {
+    private void typeEdgeInsertedForArgument(EditOperation editOperation,
+                                             List<EditOperation> editOperations,
+                                             Mapping mapping) {
         Vertex argument = editOperation.getTargetEdge().getFrom();
         Vertex fieldOrDirective = newSchemaGraph.getFieldOrDirectiveForArgument(argument);
         if (fieldOrDirective.isOfType(SchemaGraph.FIELD)) {
@@ -960,6 +1516,7 @@ public class EditOperationAnalyzer {
 
             if (objectOrInterface.isOfType(SchemaGraph.OBJECT)) {
                 Vertex object = objectOrInterface;
+
                 // if the whole object is new we are done
                 if (isObjectAdded(object.getName())) {
                     return;
@@ -972,6 +1529,7 @@ public class EditOperationAnalyzer {
                 if (isArgumentNewForExistingObjectField(object.getName(), field.getName(), argument.getName())) {
                     return;
                 }
+
                 String newType = getTypeFromEdgeLabel(editOperation.getTargetEdge());
                 // this means we have an existing object changed its type
                 // and there must be a deleted edge with the old type information
@@ -979,9 +1537,16 @@ public class EditOperationAnalyzer {
                 String oldType = getTypeFromEdgeLabel(deletedTypeEdgeOperation.getSourceEdge());
                 ObjectFieldArgumentTypeModification objectFieldArgumentTypeModification = new ObjectFieldArgumentTypeModification(field.getName(), argument.getName(), oldType, newType);
                 getObjectModification(object.getName()).getDetails().add(objectFieldArgumentTypeModification);
+
+                String oldDefaultValue = getDefaultValueFromEdgeLabel(deletedTypeEdgeOperation.getSourceEdge());
+                String newDefaultValue = getDefaultValueFromEdgeLabel(editOperation.getTargetEdge());
+                if (!oldDefaultValue.equals(newDefaultValue)) {
+                    getObjectModification(object.getName()).getDetails().add(new ObjectFieldArgumentDefaultValueModification(field.getName(), argument.getName(), oldDefaultValue, newDefaultValue));
+                }
             } else {
                 assertTrue(objectOrInterface.isOfType(SchemaGraph.INTERFACE));
                 Vertex interfaze = objectOrInterface;
+
                 // if the whole object is new we are done
                 if (isInterfaceAdded(interfaze.getName())) {
                     return;
@@ -994,6 +1559,7 @@ public class EditOperationAnalyzer {
                 if (isArgumentNewForExistingInterfaceField(interfaze.getName(), field.getName(), argument.getName())) {
                     return;
                 }
+
                 String newType = getTypeFromEdgeLabel(editOperation.getTargetEdge());
                 // this means we have an existing object changed its type
                 // and there must be a deleted edge with the old type information
@@ -1001,27 +1567,41 @@ public class EditOperationAnalyzer {
                 String oldType = getTypeFromEdgeLabel(deletedTypeEdgeOperation.getSourceEdge());
                 InterfaceFieldArgumentTypeModification interfaceFieldArgumentTypeModification = new InterfaceFieldArgumentTypeModification(field.getName(), argument.getName(), oldType, newType);
                 getInterfaceModification(interfaze.getName()).getDetails().add(interfaceFieldArgumentTypeModification);
+
+                String oldDefaultValue = getDefaultValueFromEdgeLabel(deletedTypeEdgeOperation.getSourceEdge());
+                String newDefaultValue = getDefaultValueFromEdgeLabel(editOperation.getTargetEdge());
+                if (!oldDefaultValue.equals(newDefaultValue)) {
+                    getInterfaceModification(interfaze.getName()).getDetails().add(new InterfaceFieldArgumentDefaultValueModification(field.getName(), argument.getName(), oldDefaultValue, newDefaultValue));
+                }
             }
         } else {
             assertTrue(fieldOrDirective.isOfType(SchemaGraph.DIRECTIVE));
             Vertex directive = fieldOrDirective;
+
             if (isDirectiveAdded(directive.getName())) {
                 return;
             }
             if (isArgumentNewForExistingDirective(directive.getName(), argument.getName())) {
                 return;
             }
+
             String newType = getTypeFromEdgeLabel(editOperation.getTargetEdge());
             EditOperation deletedTypeEdgeOperation = findDeletedEdge(argument, editOperations, mapping, this::isTypeEdge);
             String oldType = getTypeFromEdgeLabel(deletedTypeEdgeOperation.getSourceEdge());
             DirectiveArgumentTypeModification directiveArgumentTypeModification = new DirectiveArgumentTypeModification(argument.getName(), oldType, newType);
             getDirectiveModification(directive.getName()).getDetails().add(directiveArgumentTypeModification);
-        }
 
+            String oldDefaultValue = getDefaultValueFromEdgeLabel(deletedTypeEdgeOperation.getSourceEdge());
+            String newDefaultValue = getDefaultValueFromEdgeLabel(editOperation.getTargetEdge());
+            if (!oldDefaultValue.equals(newDefaultValue)) {
+                getDirectiveModification(directive.getName()).getDetails().add(new DirectiveArgumentDefaultValueModification(argument.getName(), oldDefaultValue, newDefaultValue));
+            }
+        }
     }
 
-    private void typeEdgeInsertedForField(EditOperation
-                                                  editOperation, List<EditOperation> editOperations, Mapping mapping) {
+    private void typeEdgeInsertedForField(EditOperation editOperation,
+                                          List<EditOperation> editOperations,
+                                          Mapping mapping) {
         Vertex field = editOperation.getTargetEdge().getFrom();
         Vertex objectOrInterface = newSchemaGraph.getFieldsContainerForField(field);
         if (objectOrInterface.isOfType(SchemaGraph.OBJECT)) {
@@ -1078,13 +1658,13 @@ public class EditOperationAnalyzer {
     }
 
 
-    private void typeEdgeChanged(EditOperation editOperation) {
+    private void typeEdgeChanged(EditOperation editOperation, Mapping mapping) {
         Edge targetEdge = editOperation.getTargetEdge();
         Vertex from = targetEdge.getFrom();
         if (from.isOfType(SchemaGraph.FIELD)) {
             outputFieldTypeChanged(editOperation);
         } else if (from.isOfType(SchemaGraph.ARGUMENT)) {
-            argumentTypeOrDefaultValueChanged(editOperation);
+            argumentTypeOrDefaultValueChanged(editOperation, mapping);
         } else if (from.isOfType(SchemaGraph.INPUT_FIELD)) {
             inputFieldTypeOrDefaultValueChanged(editOperation);
         }
@@ -1094,6 +1674,11 @@ public class EditOperationAnalyzer {
         Edge targetEdge = editOperation.getTargetEdge();
         Vertex inputField = targetEdge.getFrom();
         Vertex inputObject = newSchemaGraph.getInputObjectForInputField(inputField);
+
+        if (isInputObjectAdded(inputObject.getName())) {
+            return;
+        }
+
         String oldDefaultValue = getDefaultValueFromEdgeLabel(editOperation.getSourceEdge());
         String newDefaultValue = getDefaultValueFromEdgeLabel(editOperation.getTargetEdge());
         if (!oldDefaultValue.equals(newDefaultValue)) {
@@ -1108,9 +1693,14 @@ public class EditOperationAnalyzer {
         }
     }
 
-    private void argumentTypeOrDefaultValueChanged(EditOperation editOperation) {
-        Edge targetEdge = editOperation.getTargetEdge();
-        Vertex argument = targetEdge.getFrom();
+    private void argumentTypeOrDefaultValueChanged(EditOperation editOperation, Mapping mapping) {
+        Vertex oldArgument = editOperation.getSourceEdge().getFrom();
+        Vertex argument = editOperation.getTargetEdge().getFrom();
+
+        if (!doesArgumentChangeMakeSense(oldArgument, argument, mapping)) {
+            return;
+        }
+
         Vertex fieldOrDirective = newSchemaGraph.getFieldOrDirectiveForArgument(argument);
         if (fieldOrDirective.isOfType(SchemaGraph.FIELD)) {
             Vertex field = fieldOrDirective;
@@ -1149,7 +1739,6 @@ public class EditOperationAnalyzer {
                     getInterfaceModification(objectOrInterface.getName()).getDetails().add(interfaceFieldArgumentTypeModification);
                 }
             }
-
         } else {
             assertTrue(fieldOrDirective.isOfType(SchemaGraph.DIRECTIVE));
             Vertex directive = fieldOrDirective;
@@ -1159,16 +1748,29 @@ public class EditOperationAnalyzer {
             if (!oldDefaultValue.equals(newDefaultValue)) {
                 getDirectiveModification(directive.getName()).getDetails().add(new DirectiveArgumentDefaultValueModification(argument.getName(), oldDefaultValue, newDefaultValue));
             }
-
             String oldType = getTypeFromEdgeLabel(editOperation.getSourceEdge());
             String newType = getTypeFromEdgeLabel(editOperation.getTargetEdge());
 
             if (!oldType.equals(newType)) {
                 getDirectiveModification(directive.getName()).getDetails().add(new DirectiveArgumentTypeModification(argument.getName(), oldType, newType));
-
             }
         }
+    }
 
+    /**
+     * Sometimes the diffing algorithm will give us an argument change when the argument container
+     * changed i.e. the argument was "moved" around because the deleted and newly added arguments
+     * look similar.
+     * <p>
+     * We only want to report argument type changes if it makes sense i.e. if the argument container was the same.
+     */
+    private boolean doesArgumentChangeMakeSense(Vertex oldArgument, Vertex newArgument, Mapping mapping) {
+        // Container for an argument in this case should be a field or directive
+        Vertex oldContainer = oldSchemaGraph.getFieldOrDirectiveForArgument(oldArgument);
+        Vertex newContainer = newSchemaGraph.getFieldOrDirectiveForArgument(newArgument);
+
+        // Make sure the container is the same
+        return mapping.getTarget(oldContainer) == newContainer;
     }
 
     private void outputFieldTypeChanged(EditOperation editOperation) {
@@ -1190,10 +1792,7 @@ public class EditOperationAnalyzer {
             String oldType = getTypeFromEdgeLabel(editOperation.getSourceEdge());
             String newType = getTypeFromEdgeLabel(editOperation.getTargetEdge());
             interfaceModification.getDetails().add(new InterfaceFieldTypeModification(fieldName, oldType, newType));
-
         }
-
-
     }
 
     // TODO: this is not great, we should avoid parsing the label like that
@@ -1304,6 +1903,150 @@ public class EditOperationAnalyzer {
         return inputObjectDifferences.containsKey(name) && inputObjectDifferences.get(name) instanceof InputObjectAddition;
     }
 
+    private boolean isAppliedDirectiveAdded(Vertex container, String appliedDirectiveName) {
+        if (container.isOfType(SchemaGraph.SCALAR)) {
+            if (scalarDifferences.containsKey(container.getName())) {
+                ScalarDifference scalarDifference = scalarDifferences.get(container.getName());
+                if (scalarDifference instanceof ScalarModification) {
+                    ScalarModification scalarModification = (ScalarModification) scalarDifference;
+                    List<AppliedDirectiveAddition> appliedDirectiveAdditions = scalarModification.getDetails(AppliedDirectiveAddition.class);
+                    return appliedDirectiveAdditions.stream().anyMatch(addition -> addition.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (container.isOfType(SchemaGraph.ENUM)) {
+            if (enumDifferences.containsKey(container.getName())) {
+                EnumDifference enumDifference = enumDifferences.get(container.getName());
+                if (enumDifference instanceof EnumModification) {
+                    EnumModification enumModification = (EnumModification) enumDifference;
+                    List<AppliedDirectiveAddition> appliedDirectiveAdditions = enumModification.getDetails(AppliedDirectiveAddition.class);
+                    return appliedDirectiveAdditions.stream().anyMatch(addition -> addition.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (container.isOfType(SchemaGraph.OBJECT)) {
+            if (objectDifferences.containsKey(container.getName())) {
+                ObjectDifference objectDifference = objectDifferences.get(container.getName());
+                if (objectDifference instanceof ObjectModification) {
+                    ObjectModification objectModification = (ObjectModification) objectDifference;
+                    List<AppliedDirectiveAddition> appliedDirectiveAdditions = objectModification.getDetails(AppliedDirectiveAddition.class);
+                    return appliedDirectiveAdditions.stream().anyMatch(addition -> addition.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (container.isOfType(SchemaGraph.INTERFACE)) {
+            if (interfaceDifferences.containsKey(container.getName())) {
+                InterfaceDifference interfaceDifference = interfaceDifferences.get(container.getName());
+                if (interfaceDifference instanceof InterfaceModification) {
+                    InterfaceModification interfaceModification = (InterfaceModification) interfaceDifference;
+                    List<AppliedDirectiveAddition> appliedDirectiveAdditions = interfaceModification.getDetails(AppliedDirectiveAddition.class);
+                    return appliedDirectiveAdditions.stream().anyMatch(addition -> addition.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (container.isOfType(SchemaGraph.INPUT_OBJECT)) {
+            if (inputObjectDifferences.containsKey(container.getName())) {
+                InputObjectDifference inputObjectDifference = inputObjectDifferences.get(container.getName());
+                if (inputObjectDifference instanceof InputObjectModification) {
+                    InputObjectModification inputObjectModification = (InputObjectModification) inputObjectDifference;
+                    List<AppliedDirectiveAddition> appliedDirectiveAdditions = inputObjectModification.getDetails(AppliedDirectiveAddition.class);
+                    return appliedDirectiveAdditions.stream().anyMatch(addition -> addition.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (container.isOfType(SchemaGraph.UNION)) {
+            if (unionDifferences.containsKey(container.getName())) {
+                UnionDifference unionDifference = unionDifferences.get(container.getName());
+                if (unionDifference instanceof UnionModification) {
+                    UnionModification unionModification = (UnionModification) unionDifference;
+                    List<AppliedDirectiveAddition> appliedDirectiveAdditions = unionModification.getDetails(AppliedDirectiveAddition.class);
+                    return appliedDirectiveAdditions.stream().anyMatch(addition -> addition.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (container.isOfType(SchemaGraph.DIRECTIVE)) {
+            if (directiveDifferences.containsKey(container.getName())) {
+                DirectiveDifference directiveDifference = directiveDifferences.get(container.getName());
+                if (directiveDifference instanceof DirectiveModification) {
+                    DirectiveModification directiveModification = (DirectiveModification) directiveDifference;
+                    List<AppliedDirectiveAddition> appliedDirectiveAdditions = directiveModification.getDetails(AppliedDirectiveAddition.class);
+                    return appliedDirectiveAdditions.stream().anyMatch(addition -> addition.getName().equals(appliedDirectiveName));
+                }
+            }
+        }
+        return false;
+    }
+
+
+    private boolean isAppliedDirectiveDeleted(Vertex rootContainer, String appliedDirectiveName) {
+//        if (rootContainer.isOfType(SchemaGraph.ARGUMENT)) {
+//            Vertex argument = rootContainer;
+//            Vertex fieldOrDirective = oldSchemaGraph.getFieldOrDirectiveForArgument(argument);
+//            if (fieldOrDirective.isOfType(SchemaGraph.DIRECTIVE)) {
+//                return isArgumentDeletedFromExistingDirective(fieldOrDirective.getName(), argument.getName());
+//            }
+//        }
+        if (rootContainer.isOfType(SchemaGraph.SCALAR)) {
+            if (scalarDifferences.containsKey(rootContainer.getName())) {
+                ScalarDifference scalarDifference = scalarDifferences.get(rootContainer.getName());
+                if (scalarDifference instanceof ScalarModification) {
+                    ScalarModification scalarModification = (ScalarModification) scalarDifference;
+                    List<AppliedDirectiveDeletion> appliedDirectiveDeletions = scalarModification.getDetails(AppliedDirectiveDeletion.class);
+                    return appliedDirectiveDeletions.stream().anyMatch(deletion -> deletion.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (rootContainer.isOfType(SchemaGraph.ENUM)) {
+            if (enumDifferences.containsKey(rootContainer.getName())) {
+                EnumDifference enumDifference = enumDifferences.get(rootContainer.getName());
+                if (enumDifference instanceof EnumModification) {
+                    EnumModification enumModification = (EnumModification) enumDifference;
+                    List<AppliedDirectiveDeletion> appliedDirectiveDeletions = enumModification.getDetails(AppliedDirectiveDeletion.class);
+                    return appliedDirectiveDeletions.stream().anyMatch(deletion -> deletion.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (rootContainer.isOfType(SchemaGraph.OBJECT)) {
+            if (objectDifferences.containsKey(rootContainer.getName())) {
+                ObjectDifference objectDifference = objectDifferences.get(rootContainer.getName());
+                if (objectDifference instanceof ObjectModification) {
+                    ObjectModification objectModification = (ObjectModification) objectDifference;
+                    List<AppliedDirectiveDeletion> appliedDirectiveDeletions = objectModification.getDetails(AppliedDirectiveDeletion.class);
+                    return appliedDirectiveDeletions.stream().anyMatch(deletion -> deletion.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (rootContainer.isOfType(SchemaGraph.INTERFACE)) {
+            if (interfaceDifferences.containsKey(rootContainer.getName())) {
+                InterfaceDifference interfaceDifference = interfaceDifferences.get(rootContainer.getName());
+                if (interfaceDifference instanceof InterfaceModification) {
+                    InterfaceModification interfaceModification = (InterfaceModification) interfaceDifference;
+                    List<AppliedDirectiveDeletion> appliedDirectiveDeletions = interfaceModification.getDetails(AppliedDirectiveDeletion.class);
+                    return appliedDirectiveDeletions.stream().anyMatch(deletion -> deletion.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (rootContainer.isOfType(SchemaGraph.INPUT_OBJECT)) {
+            if (inputObjectDifferences.containsKey(rootContainer.getName())) {
+                InputObjectDifference inputObjectDifference = inputObjectDifferences.get(rootContainer.getName());
+                if (inputObjectDifference instanceof InputObjectModification) {
+                    InputObjectModification inputObjectModification = (InputObjectModification) inputObjectDifference;
+                    List<AppliedDirectiveDeletion> appliedDirectiveDeletions = inputObjectModification.getDetails(AppliedDirectiveDeletion.class);
+                    return appliedDirectiveDeletions.stream().anyMatch(deletion -> deletion.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (rootContainer.isOfType(SchemaGraph.UNION)) {
+            if (unionDifferences.containsKey(rootContainer.getName())) {
+                UnionDifference unionDifference = unionDifferences.get(rootContainer.getName());
+                if (unionDifference instanceof UnionModification) {
+                    UnionModification unionModification = (UnionModification) unionDifference;
+                    List<AppliedDirectiveDeletion> appliedDirectiveDeletions = unionModification.getDetails(AppliedDirectiveDeletion.class);
+                    return appliedDirectiveDeletions.stream().anyMatch(deletion -> deletion.getName().equals(appliedDirectiveName));
+                }
+            }
+        } else if (rootContainer.isOfType(SchemaGraph.DIRECTIVE)) {
+            if (directiveDifferences.containsKey(rootContainer.getName())) {
+                DirectiveDifference directiveDifference = directiveDifferences.get(rootContainer.getName());
+                if (directiveDifference instanceof DirectiveModification) {
+                    DirectiveModification directiveModification = (DirectiveModification) directiveDifference;
+                    List<AppliedDirectiveDeletion> appliedDirectiveDeletions = directiveModification.getDetails(AppliedDirectiveDeletion.class);
+                    return appliedDirectiveDeletions.stream().anyMatch(deletion -> deletion.getName().equals(appliedDirectiveName));
+                }
+            }
+        }
+        return false;
+    }
+
     private boolean isNewInputFieldExistingInputObject(String inputObjectName, String fieldName) {
         if (!inputObjectDifferences.containsKey(inputObjectName)) {
             return false;
@@ -1371,7 +2114,8 @@ public class EditOperationAnalyzer {
         return newArgs.stream().anyMatch(detail -> detail.getFieldName().equals(fieldName) && detail.getName().equals(argumentName));
     }
 
-    private boolean isArgumentDeletedFromExistingObjectField(String objectName, String fieldName, String argumentName) {
+    private boolean isArgumentDeletedFromExistingObjectField(String objectName, String fieldName, String
+            argumentName) {
         if (!objectDifferences.containsKey(objectName)) {
             return false;
         }
@@ -1390,7 +2134,8 @@ public class EditOperationAnalyzer {
         return deletedArgs.stream().anyMatch(detail -> detail.getFieldName().equals(fieldName) && detail.getName().equals(argumentName));
     }
 
-    private boolean isArgumentDeletedFromExistingInterfaceField(String interfaceName, String fieldName, String argumentName) {
+    private boolean isArgumentDeletedFromExistingInterfaceField(String interfaceName, String fieldName, String
+            argumentName) {
         if (!interfaceDifferences.containsKey(interfaceName)) {
             return false;
         }
@@ -1681,53 +2426,114 @@ public class EditOperationAnalyzer {
     }
 
     private void argumentDeleted(EditOperation editOperation) {
+        // Note: sometimes the edit operation is the argument vertex itself being deleted
+        // Other times, it is the edge to the argument type being deleted
         Vertex deletedArgument = editOperation.getSourceVertex();
+        if (deletedArgument == null) {
+            deletedArgument = editOperation.getSourceEdge().getTo();
+        }
+
         Vertex fieldOrDirective = oldSchemaGraph.getFieldOrDirectiveForArgument(deletedArgument);
         if (fieldOrDirective.isOfType(SchemaGraph.FIELD)) {
             Vertex field = fieldOrDirective;
             Vertex fieldsContainerForField = oldSchemaGraph.getFieldsContainerForField(field);
             if (fieldsContainerForField.isOfType(SchemaGraph.OBJECT)) {
                 Vertex object = fieldsContainerForField;
+                if (isObjectDeleted(object.getName())) {
+                    return;
+                }
+                if (isFieldDeletedFromExistingObject(object.getName(), field.getName())) {
+                    return;
+                }
+                if (isArgumentDeletedFromExistingObjectField(object.getName(), field.getName(), deletedArgument.getName())) {
+                    return;
+                }
                 getObjectModification(object.getName()).getDetails().add(new ObjectFieldArgumentDeletion(field.getName(), deletedArgument.getName()));
             } else {
                 assertTrue(fieldsContainerForField.isOfType(SchemaGraph.INTERFACE));
                 Vertex interfaze = fieldsContainerForField;
+                if (isInterfaceDeleted(interfaze.getName())) {
+                    return;
+                }
+                if (isFieldDeletedFromExistingInterface(interfaze.getName(), field.getName())) {
+                    return;
+                }
+                if (isArgumentDeletedFromExistingInterfaceField(interfaze.getName(), field.getName(), deletedArgument.getName())) {
+                    return;
+                }
                 getInterfaceModification(interfaze.getName()).getDetails().add(new InterfaceFieldArgumentDeletion(field.getName(), deletedArgument.getName()));
             }
         } else {
             assertTrue(fieldOrDirective.isOfType(SchemaGraph.DIRECTIVE));
             Vertex directive = fieldOrDirective;
+            if (isDirectiveDeleted(directive.getName())) {
+                return;
+            }
+            if (isArgumentDeletedFromExistingDirective(directive.getName(), deletedArgument.getName())) {
+                return;
+            }
             getDirectiveModification(directive.getName()).getDetails().add(new DirectiveArgumentDeletion(deletedArgument.getName()));
         }
-
     }
 
     private void argumentAdded(EditOperation editOperation) {
         Vertex addedArgument = editOperation.getTargetVertex();
+        if (addedArgument == null) {
+            addedArgument = editOperation.getTargetEdge().getTo();
+        }
+
         Vertex fieldOrDirective = newSchemaGraph.getFieldOrDirectiveForArgument(addedArgument);
+
         if (fieldOrDirective.isOfType(SchemaGraph.FIELD)) {
             Vertex field = fieldOrDirective;
             Vertex fieldsContainerForField = newSchemaGraph.getFieldsContainerForField(field);
             if (fieldsContainerForField.isOfType(SchemaGraph.OBJECT)) {
                 Vertex object = fieldsContainerForField;
+                if (isObjectAdded(object.getName())) {
+                    return;
+                }
+                if (isFieldNewForExistingObject(object.getName(), field.getName())) {
+                    return;
+                }
+                if (isArgumentNewForExistingObjectField(object.getName(), field.getName(), addedArgument.getName())) {
+                    return;
+                }
                 getObjectModification(object.getName()).getDetails().add(new ObjectFieldArgumentAddition(field.getName(), addedArgument.getName()));
             } else {
                 assertTrue(fieldsContainerForField.isOfType(SchemaGraph.INTERFACE));
                 Vertex interfaze = fieldsContainerForField;
+                if (isInterfaceAdded(interfaze.getName())) {
+                    return;
+                }
+                if (isFieldNewForExistingInterface(interfaze.getName(), field.getName())) {
+                    return;
+                }
+                if (isArgumentNewForExistingInterfaceField(interfaze.getName(), field.getName(), addedArgument.getName())) {
+                    return;
+                }
                 getInterfaceModification(interfaze.getName()).getDetails().add(new InterfaceFieldArgumentAddition(field.getName(), addedArgument.getName()));
             }
         } else {
             assertTrue(fieldOrDirective.isOfType(SchemaGraph.DIRECTIVE));
             Vertex directive = fieldOrDirective;
+            if (isDirectiveAdded(directive.getName())) {
+                return;
+            }
+            if (isArgumentNewForExistingDirective(directive.getName(), addedArgument.getName())) {
+                return;
+            }
             getDirectiveModification(directive.getName()).getDetails().add(new DirectiveArgumentAddition(addedArgument.getName()));
-
         }
-
     }
 
     private void changedEnum(EditOperation editOperation) {
         String oldName = editOperation.getSourceVertex().getName();
         String newName = editOperation.getTargetVertex().getName();
+
+        if (oldName.equals(newName)) {
+            // Something else like description could have changed
+            return;
+        }
 
         EnumModification modification = new EnumModification(oldName, newName);
         enumDifferences.put(oldName, modification);
@@ -1738,6 +2544,11 @@ public class EditOperationAnalyzer {
         String oldName = editOperation.getSourceVertex().getName();
         String newName = editOperation.getTargetVertex().getName();
 
+        if (oldName.equals(newName)) {
+            // Something else like description could have changed
+            return;
+        }
+
         ScalarModification modification = new ScalarModification(oldName, newName);
         scalarDifferences.put(oldName, modification);
         scalarDifferences.put(newName, modification);
@@ -1746,6 +2557,11 @@ public class EditOperationAnalyzer {
     private void changedInputObject(EditOperation editOperation) {
         String oldName = editOperation.getSourceVertex().getName();
         String newName = editOperation.getTargetVertex().getName();
+
+        if (oldName.equals(newName)) {
+            // Something else like description could have changed
+            return;
+        }
 
         InputObjectModification modification = new InputObjectModification(oldName, newName);
         inputObjectDifferences.put(oldName, modification);
@@ -1756,6 +2572,11 @@ public class EditOperationAnalyzer {
         String oldName = editOperation.getSourceVertex().getName();
         String newName = editOperation.getTargetVertex().getName();
 
+        if (oldName.equals(newName)) {
+            // Something else like description could have changed
+            return;
+        }
+
         DirectiveModification modification = new DirectiveModification(oldName, newName);
         directiveDifferences.put(oldName, modification);
         directiveDifferences.put(newName, modification);
@@ -1764,6 +2585,11 @@ public class EditOperationAnalyzer {
     private void changedObject(EditOperation editOperation) {
         String oldName = editOperation.getSourceVertex().getName();
         String newName = editOperation.getTargetVertex().getName();
+
+        if (oldName.equals(newName)) {
+            // Something else like description could have changed
+            return;
+        }
 
         ObjectModification objectModification = new ObjectModification(oldName, newName);
         objectDifferences.put(oldName, objectModification);
@@ -1774,68 +2600,117 @@ public class EditOperationAnalyzer {
         String oldName = editOperation.getSourceVertex().getName();
         String newName = editOperation.getTargetVertex().getName();
 
+        if (oldName.equals(newName)) {
+            // Something else like description could have changed
+            return;
+        }
+
         InterfaceModification interfaceModification = new InterfaceModification(oldName, newName);
         interfaceDifferences.put(oldName, interfaceModification);
         interfaceDifferences.put(newName, interfaceModification);
     }
 
     private void changedUnion(EditOperation editOperation) {
-        String newUnionName = editOperation.getTargetVertex().getName();
-        String oldUnionName = editOperation.getSourceVertex().getName();
+        String newName = editOperation.getTargetVertex().getName();
+        String oldName = editOperation.getSourceVertex().getName();
 
-        UnionModification objectModification = new UnionModification(oldUnionName, newUnionName);
-        unionDifferences.put(oldUnionName, objectModification);
-        unionDifferences.put(newUnionName, objectModification);
+        if (oldName.equals(newName)) {
+            // Something else like description could have changed
+            return;
+        }
+
+        UnionModification objectModification = new UnionModification(oldName, newName);
+        unionDifferences.put(oldName, objectModification);
+        unionDifferences.put(newName, objectModification);
     }
-//
-//    private void changedUnion(EditOperation editOperation) {
-//        // object changes include: adding/removing Interface, adding/removing applied directives, changing name
-//        String objectName = editOperation.getTargetVertex().getName();
-//
-//        ObjectAdded objectAdded = new ObjectAdded(objectName);
-//        changes.add(objectAdded);
-//    }
-//
-//    private void changedEnum(EditOperation editOperation) {
-//        // object changes include: adding/removing Interface, adding/removing applied directives, changing name
-//        String objectName = editOperation.getTargetVertex().getName();
-//
-//        ObjectAdded objectAdded = new ObjectAdded(objectName);
-//        changes.add(objectAdded);
-//    }
-//
-//    private void changedInputObject(EditOperation editOperation) {
-//        // object changes include: adding/removing Interface, adding/removing applied directives, changing name
-//        String objectName = editOperation.getTargetVertex().getName();
-//
-//        ObjectAdded objectAdded = new ObjectAdded(objectName);
-//        changes.add(objectAdded);
-//    }
-//
-//    private void changedScalar(EditOperation editOperation) {
-//        // object changes include: adding/removing Interface, adding/removing applied directives, changing name
-//        String objectName = editOperation.getTargetVertex().getName();
-//
-//        ObjectAdded objectAdded = new ObjectAdded(objectName);
-//        changes.add(objectAdded);
-//    }
-//
-//    private void changedField(EditOperation editOperation) {
-//        // object changes include: adding/removing Interface, adding/removing applied directives, changing name
-//        Vertex field = editOperation.getTargetVertex();
-//        Vertex fieldsContainerForField = newSchemaGraph.getFieldsContainerForField(field);
-//
-//        FieldModification objectAdded = new FieldModification(field.getName(), fieldsContainerForField.getName());
-//        changes.add(objectAdded);
-//    }
-//
-//    private void changedInputField(EditOperation editOperation) {
-//        // object changes include: adding/removing Interface, adding/removing applied directives, changing name
-//        String objectName = editOperation.getTargetVertex().getName();
-//
-//        ObjectAdded objectAdded = new ObjectAdded(objectName);
-//        changes.add(objectAdded);
-//    }
 
+    /**
+     * The order to traverse edit operations according to the operation.
+     *
+     * @see #getTraversalOrder(List)
+     */
+    private static final List<EditOperation.Operation> OPERATION_TRAVERSAL_ORDER = List.of(
+            EditOperation.Operation.CHANGE_VERTEX,
+            EditOperation.Operation.INSERT_VERTEX,
+            EditOperation.Operation.DELETE_VERTEX,
+            EditOperation.Operation.CHANGE_EDGE,
+            EditOperation.Operation.INSERT_EDGE,
+            EditOperation.Operation.DELETE_EDGE
+    );
 
+    /**
+     * The order to traverse edit operations according to the vertex types involved.
+     *
+     * @see #getTraversalOrder(List)
+     */
+    private static final List<String> TYPE_TRAVERSAL_ORDER = List.of(
+            // These are all top level declarations
+            SchemaGraph.SCHEMA,
+            SchemaGraph.OBJECT,
+            SchemaGraph.INTERFACE,
+            SchemaGraph.UNION,
+            SchemaGraph.SCALAR,
+            SchemaGraph.ENUM,
+            SchemaGraph.INPUT_OBJECT,
+            SchemaGraph.DIRECTIVE,
+            // These are all direct descendants of top level declarations
+            SchemaGraph.FIELD,
+            SchemaGraph.INPUT_FIELD,
+            SchemaGraph.ENUM_VALUE,
+            // Everything else
+            SchemaGraph.ARGUMENT,
+            SchemaGraph.APPLIED_DIRECTIVE,
+            SchemaGraph.APPLIED_ARGUMENT,
+            SchemaGraph.ISOLATED
+    );
+
+    /**
+     * The input list of {@link EditOperation}s does not conform to any order.
+     * <p>
+     * We need to sort it as we sometimes rely on the parents being processed first.
+     * <p>
+     * e.g. we ignore a new argument if the parent of the argument is new.
+     * However, if the argument addition is processed before the
+     */
+    @VisibleForTesting
+    static List<EditOperation> getTraversalOrder(List<EditOperation> editOperations) {
+        ArrayList<EditOperation> sorted = new ArrayList<>(editOperations);
+
+        sorted.sort(
+                Comparator
+                        .<EditOperation>comparingInt((editOperation) -> {
+                            int i = OPERATION_TRAVERSAL_ORDER.indexOf(editOperation.getOperation());
+                            if (i < 0) {
+                                return Assert.assertShouldNeverHappen("Unknown operation: " + editOperation.getOperation());
+                            }
+                            return i;
+                        })
+                        .thenComparing((editOperation) -> {
+                            // Converts this editOperation into an index from the order
+                            // The lower the index, the earlier it appears in the sorted list
+                            for (int i = 0; i < TYPE_TRAVERSAL_ORDER.size(); i++) {
+                                String type = TYPE_TRAVERSAL_ORDER.get(i);
+
+                                if (isAnyVertexOfType(editOperation, type)) {
+                                    return i;
+                                }
+                            }
+
+                            return Assert.assertShouldNeverHappen("Unable to determine edit operation subject for: " + editOperation);
+                        })
+        );
+
+        return sorted;
+    }
+
+    private static boolean isAnyVertexOfType(EditOperation edit, String type) {
+        return (edit.getSourceVertex() != null && edit.getSourceVertex().isOfType(type))
+                || (edit.getTargetVertex() != null && edit.getTargetVertex().isOfType(type))
+                || (edit.getSourceEdge() != null && isAnyVertexOfType(edit.getSourceEdge(), type))
+                || (edit.getTargetEdge() != null && isAnyVertexOfType(edit.getTargetEdge(), type));
+    }
+
+    private static boolean isAnyVertexOfType(Edge edge, String type) {
+        return edge.getFrom().isOfType(type) || edge.getTo().isOfType(type);
+    }
 }

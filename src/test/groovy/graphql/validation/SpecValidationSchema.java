@@ -1,5 +1,6 @@
 package graphql.validation;
 
+import graphql.Directives;
 import graphql.Scalars;
 import graphql.schema.GraphQLArgument;
 import graphql.schema.GraphQLCodeRegistry;
@@ -29,7 +30,10 @@ import static graphql.introspection.Introspection.DirectiveLocation.INLINE_FRAGM
 import static graphql.introspection.Introspection.DirectiveLocation.QUERY;
 import static graphql.schema.GraphQLArgument.newArgument;
 import static graphql.schema.GraphQLFieldDefinition.newFieldDefinition;
+import static graphql.schema.GraphQLInputObjectField.newInputObjectField;
+import static graphql.schema.GraphQLInputObjectType.newInputObject;
 import static graphql.schema.GraphQLNonNull.nonNull;
+import static graphql.schema.GraphqlTypeComparatorRegistry.BY_NAME_REGISTRY;
 import static java.util.Collections.singletonList;
 
 /**
@@ -184,6 +188,18 @@ public class SpecValidationSchema {
             .validLocations(FIELD, FRAGMENT_SPREAD, FRAGMENT_DEFINITION, INLINE_FRAGMENT, QUERY)
             .build();
 
+    public static final GraphQLInputObjectType oneOfInputType = GraphQLInputObjectType.newInputObject()
+            .name("oneOfInputType")
+            .withAppliedDirective(Directives.OneOfDirective.toAppliedDirective())
+            .field(GraphQLInputObjectField.newInputObjectField()
+                    .name("a")
+                    .type(GraphQLString))
+            .field(GraphQLInputObjectField.newInputObjectField()
+                    .name("b")
+                    .type(GraphQLString))
+            .build();
+
+
     public static final GraphQLObjectType queryRoot = GraphQLObjectType.newObject()
             .name("QueryRoot")
             .field(newFieldDefinition().name("dog").type(dog)
@@ -191,12 +207,34 @@ public class SpecValidationSchema {
                     .withDirective(dogDirective)
             )
             .field(newFieldDefinition().name("pet").type(pet))
+            .field(newFieldDefinition().name("oneOfField").type(GraphQLString)
+                    .argument(newArgument().name("oneOfArg").type(oneOfInputType).build())
+            )
             .build();
 
     public static final GraphQLObjectType subscriptionRoot = GraphQLObjectType.newObject()
             .name("SubscriptionRoot")
             .field(newFieldDefinition().name("dog").type(dog))
             .field(newFieldDefinition().name("cat").type(cat))
+            .build();
+
+    public static GraphQLInputObjectType inputDogType = newInputObject()
+            .name("DogInput")
+            .description("Input for A Dog creation.")
+            .field(newInputObjectField()
+                    .name("id")
+                    .description("The id of the dog.")
+                    .type(nonNull(GraphQLString)))
+            .build();
+
+    public static final GraphQLObjectType petMutationType = GraphQLObjectType.newObject()
+            .name("PetMutationType")
+            .field(newFieldDefinition()
+                    .name("createDog")
+                    .type(dog)
+                    .argument(newArgument()
+                            .name("input")
+                            .type(inputDogType)))
             .build();
 
     public static final Set<GraphQLType> specValidationDictionary = new HashSet<GraphQLType>() {{
@@ -259,11 +297,13 @@ public class SpecValidationSchema {
             .query(queryRoot)
             .codeRegistry(codeRegistry)
             .subscription(subscriptionRoot)
+            .mutation(petMutationType)
             .additionalDirective(upperDirective)
             .additionalDirective(lowerDirective)
             .additionalDirective(dogDirective)
             .additionalDirective(nonNullDirective)
             .additionalDirective(objectArgumentDirective)
+            .additionalDirective(Directives.DeferDirective)
             .additionalTypes(specValidationDictionary)
             .build();
 

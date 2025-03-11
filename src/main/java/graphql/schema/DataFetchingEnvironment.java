@@ -1,9 +1,7 @@
 package graphql.schema;
 
-import graphql.DeprecatedAt;
 import graphql.GraphQLContext;
 import graphql.PublicApi;
-import graphql.cachecontrol.CacheControl;
 import graphql.execution.ExecutionId;
 import graphql.execution.ExecutionStepInfo;
 import graphql.execution.MergedField;
@@ -15,6 +13,8 @@ import graphql.language.FragmentDefinition;
 import graphql.language.OperationDefinition;
 import org.dataloader.DataLoader;
 import org.dataloader.DataLoaderRegistry;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 import java.util.Locale;
@@ -39,6 +39,7 @@ public interface DataFetchingEnvironment extends IntrospectionDataFetchingEnviro
      *
      * @return can be null for the root query, otherwise it is never null
      */
+    @Nullable
     <T> T getSource();
 
     /**
@@ -63,6 +64,7 @@ public interface DataFetchingEnvironment extends IntrospectionDataFetchingEnviro
      *
      * @return the named argument or null if it's not present
      */
+    @Nullable
     <T> T getArgument(String name);
 
     /**
@@ -77,10 +79,10 @@ public interface DataFetchingEnvironment extends IntrospectionDataFetchingEnviro
     <T> T getArgumentOrDefault(String name, T defaultValue);
 
     /**
-     * Returns a legacy context argument that is set up when the {@link graphql.GraphQL#execute(graphql.ExecutionInput)} )} method
+     * Returns a legacy context argument that is set up when the {@link graphql.GraphQL#execute(graphql.ExecutionInput)} method
      * is invoked.
      * <p>
-     * This is a info object which is provided to all DataFetchers, but never used by graphql-java itself.
+     * This is an info object which is provided to all DataFetchers, but never used by graphql-java itself.
      *
      * @param <T> you decide what type it is
      *
@@ -88,27 +90,27 @@ public interface DataFetchingEnvironment extends IntrospectionDataFetchingEnviro
      *
      * @deprecated - use {@link #getGraphQlContext()} instead
      */
-    @Deprecated
-    @DeprecatedAt("2021-07-05")
+    @Deprecated(since = "2021-07-05")
     <T> T getContext();
 
     /**
      * Returns a shared context argument that is set up when the {@link graphql.GraphQL#execute(graphql.ExecutionInput)} )} method
      * is invoked.
      * <p>
-     * This is a info object which is provided to all DataFetchers.
+     * This is an info object which is provided to all DataFetchers.
      *
      * @return can NOT be null
      */
+    @NotNull
     GraphQLContext getGraphQlContext();
 
     /**
-     * This returns a context object that parent fields may have returned returned
+     * This returns a context object that parent fields may have returned
      * via {@link graphql.execution.DataFetcherResult#getLocalContext()} which can be used to pass down extra information to
      * fields beyond the normal {@link #getSource()}
      * <p>
-     * This differs from {@link #getContext()} in that it's field specific and passed from parent field to child field,
-     * whilst {@link #getContext()} is global for the whole query.
+     * This differs from {@link #getGraphQlContext()} in that it's field specific and passed from parent field to child field,
+     * whilst {@link #getGraphQlContext()} is global for the whole query.
      * <p>
      * If the field is a top level field then 'localContext' equals null since it's never be set until those
      * fields execute.
@@ -117,6 +119,7 @@ public interface DataFetchingEnvironment extends IntrospectionDataFetchingEnviro
      *
      * @return can be null if no field context objects are passed back by previous parent fields
      */
+    @Nullable
     <T> T getLocalContext();
 
     /**
@@ -139,12 +142,11 @@ public interface DataFetchingEnvironment extends IntrospectionDataFetchingEnviro
      *
      * @deprecated Use {@link #getMergedField()}.
      */
-    @Deprecated
-    @DeprecatedAt("2018-12-20")
+    @Deprecated(since = "2018-12-20")
     List<Field> getFields();
 
     /**
-     * It can happen that a query has overlapping fields which are
+     * It can happen that a query has overlapping fields which
      * are querying the same data. If this is the case they get merged
      * together and fetched only once, but this method returns all of the Fields
      * from the query.
@@ -232,21 +234,13 @@ public interface DataFetchingEnvironment extends IntrospectionDataFetchingEnviro
      *
      * @see org.dataloader.DataLoaderRegistry#getDataLoader(String)
      */
+    @Nullable
     <K, V> DataLoader<K, V> getDataLoader(String dataLoaderName);
 
     /**
      * @return the {@link org.dataloader.DataLoaderRegistry} in play
      */
     DataLoaderRegistry getDataLoaderRegistry();
-
-    /**
-     * @return the current {@link CacheControl} instance used to add cache hints to the response
-     *
-     * @deprecated - Apollo has deprecated the Cache Control specification
-     */
-    @Deprecated
-    @DeprecatedAt("2022-07-26")
-    CacheControl getCacheControl();
 
     /**
      * @return the current {@link java.util.Locale} instance used for this request

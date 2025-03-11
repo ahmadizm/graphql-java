@@ -5,7 +5,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static graphql.Assert.assertNotNull;
@@ -95,6 +97,33 @@ public class GraphQLContext {
     }
 
     /**
+     * This returns true if the value at the specified key is equal to
+     * {@link Boolean#TRUE}
+     *
+     * @param key the key to look up
+     *
+     * @return true if the value is equal to {@link Boolean#TRUE}
+     */
+    public boolean getBoolean(Object key) {
+        Object val = map.get(assertNotNull(key));
+        return Boolean.TRUE.equals(val);
+    }
+
+    /**
+     * This returns true if the value at the specified key is equal to
+     * {@link Boolean#TRUE} or the default value if the key is missing
+     *
+     * @param key          the key to look up
+     * @param defaultValue the value to use if the key is not present
+     *
+     * @return true if the value is equal to {@link Boolean#TRUE}
+     */
+    public boolean getBoolean(Object key, Boolean defaultValue) {
+        Object val = map.getOrDefault(assertNotNull(key), defaultValue);
+        return Boolean.TRUE.equals(val);
+    }
+
+    /**
      * Returns true if the context contains a value for that key
      *
      * @param key the key to lookup
@@ -169,6 +198,52 @@ public class GraphQLContext {
         Builder builder = newContext();
         contextBuilderConsumer.accept(builder);
         return putAll(builder);
+    }
+
+    /**
+     * Attempts to compute a mapping for the specified key and its
+     * current mapped value (or null if there is no current mapping).
+     *
+     * @param key               key with which the specified value is to be associated
+     * @param remappingFunction the function to compute a value
+     * @param <T>               for two
+     *
+     * @return the new value associated with the specified key, or null if none
+     */
+    public <T> T compute(Object key, BiFunction<Object, ? super T, ? extends T> remappingFunction) {
+        assertNotNull(remappingFunction);
+        return (T) map.compute(assertNotNull(key), (k, v) -> remappingFunction.apply(k, (T) v));
+    }
+
+    /**
+     * If the specified key is not already associated with a value (or is mapped to null),
+     * attempts to compute its value using the given mapping function and enters it into this map unless null.
+     *
+     * @param key             key with which the specified value is to be associated
+     * @param mappingFunction the function to compute a value
+     * @param <T>             for two
+     *
+     * @return the current (existing or computed) value associated with the specified key, or null if the computed value is null
+     */
+
+    public <T> T computeIfAbsent(Object key, Function<Object, ? extends T> mappingFunction) {
+        return (T) map.computeIfAbsent(assertNotNull(key), assertNotNull(mappingFunction));
+    }
+
+    /**
+     * If the value for the specified key is present and non-null,
+     * attempts to compute a new mapping given the key and its current mapped value.
+     *
+     * @param key               key with which the specified value is to be associated
+     * @param remappingFunction the function to compute a value
+     * @param <T>               for two
+     *
+     * @return the new value associated with the specified key, or null if none
+     */
+
+    public <T> T computeIfPresent(Object key, BiFunction<Object, ? super T, ? extends T> remappingFunction) {
+        assertNotNull(remappingFunction);
+        return (T) map.computeIfPresent(assertNotNull(key), (k, v) -> remappingFunction.apply(k, (T) v));
     }
 
     /**

@@ -2,6 +2,7 @@ package graphql.schema.diffing;
 
 
 import com.google.common.collect.HashBasedTable;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.LinkedHashMultimap;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Table;
@@ -84,14 +85,22 @@ public class SchemaGraph {
         edgesByInverseDirection.put(edge.getTo(), edge.getFrom(), edge);
     }
 
-    public List<Edge> getAdjacentEdges(Vertex from) {
-        return new ArrayList<>(edgesByDirection.row(from).values());
+    //
+//    public List<Edge> getAdjacentEdges(Vertex from) {
+//        return new ArrayList<>(edgesByDirection.row(from).values());
+//    }
+    public Collection<Edge> getAdjacentEdgesNonCopy(Vertex from) {
+        return edgesByDirection.row(from).values();
     }
 
-    public List<Edge> getAdjacentEdgesAndInverse(Vertex fromAndTo) {
-        List<Edge> result = new ArrayList<>(edgesByDirection.row(fromAndTo).values());
-        result.addAll(edgesByInverseDirection.row(fromAndTo).values());
-        return result;
+    public Iterable<Edge> getAdjacentEdgesAndInverseNonCopy(Vertex fromAndTo) {
+        Collection<Edge> edges = edgesByInverseDirection.row(fromAndTo).values();
+        Collection<Edge> edgesInverse = edgesByDirection.row(fromAndTo).values();
+        return Iterables.concat(edges, edgesInverse);
+    }
+
+    public int adjacentEdgesAndInverseCount(Vertex fromAndTo) {
+        return edgesByInverseDirection.row(fromAndTo).size() + edgesByDirection.row(fromAndTo).size();
     }
 
     public List<Vertex> getAdjacentVertices(Vertex from) {
@@ -124,6 +133,9 @@ public class SchemaGraph {
         return result;
     }
 
+    public List<Edge> getAdjacentEdges(Vertex from) {
+        return getAdjacentEdges(from, x -> true);
+    }
     public List<Edge> getAdjacentEdges(Vertex from, Predicate<Vertex> predicate) {
         List<Edge> result = new ArrayList<>();
         for (Edge edge : edgesByDirection.row(from).values()) {
@@ -135,8 +147,12 @@ public class SchemaGraph {
         return result;
     }
 
-    public List<Edge> getAdjacentEdgesInverse(Vertex to) {
-        return getAdjacentEdgesInverse(to, x -> true);
+    public List<Edge> getAdjacentEdgesInverseCopied(Vertex to) {
+        return new ArrayList<>(edgesByInverseDirection.row(to).values());
+    }
+
+    public Collection<Edge> getAdjacentEdgesInverseNonCopy(Vertex to) {
+        return edgesByInverseDirection.row(to).values();
     }
 
     public List<Edge> getAdjacentEdgesInverse(Vertex to, Predicate<Vertex> predicate) {
@@ -217,44 +233,55 @@ public class SchemaGraph {
 
     public Vertex getFieldOrDirectiveForArgument(Vertex argument) {
         List<Vertex> adjacentVertices = getAdjacentVerticesInverse(argument);
-        assertTrue(adjacentVertices.size() == 1, () -> format("No field or directive found for %s", argument));
+        assertTrue(adjacentVertices.size() == 1, "No field or directive found for %s", argument);
         return adjacentVertices.get(0);
     }
 
     public Vertex getFieldsContainerForField(Vertex field) {
         List<Vertex> adjacentVertices = getAdjacentVerticesInverse(field);
-        assertTrue(adjacentVertices.size() == 1, () -> format("No fields container found for %s", field));
+        assertTrue(adjacentVertices.size() == 1, "No fields container found for %s", field);
         return adjacentVertices.get(0);
     }
 
     public Vertex getInputObjectForInputField(Vertex inputField) {
         List<Vertex> adjacentVertices = this.getAdjacentVerticesInverse(inputField);
-        assertTrue(adjacentVertices.size() == 1, () -> format("No input object found for %s", inputField));
+        assertTrue(adjacentVertices.size() == 1, "No input object found for %s", inputField);
         return adjacentVertices.get(0);
     }
 
     public Vertex getAppliedDirectiveForAppliedArgument(Vertex appliedArgument) {
         List<Vertex> adjacentVertices = this.getAdjacentVerticesInverse(appliedArgument);
-        assertTrue(adjacentVertices.size() == 1, () -> format("No applied directive found for %s", appliedArgument));
+        assertTrue(adjacentVertices.size() == 1, "No applied directive found for %s", appliedArgument);
         return adjacentVertices.get(0);
     }
 
     public Vertex getAppliedDirectiveContainerForAppliedDirective(Vertex appliedDirective) {
         List<Vertex> adjacentVertices = this.getAdjacentVerticesInverse(appliedDirective);
-        assertTrue(adjacentVertices.size() == 1, () -> format("No applied directive container found for %s", appliedDirective));
+        assertTrue(adjacentVertices.size() == 1, "No applied directive container found for %s", appliedDirective);
         return adjacentVertices.get(0);
     }
 
+    /**
+     * Gets the one inverse adjacent edge to the input and gets the other vertex.
+     *
+     * @param input  the vertex input
+     * @return a vertex
+     */
+    public Vertex getSingleAdjacentInverseVertex(Vertex input) {
+        Collection<Edge> adjacentVertices = this.getAdjacentEdgesInverseNonCopy(input);
+        assertTrue(adjacentVertices.size() == 1, "No parent found for %s", input);
+        return adjacentVertices.iterator().next().getFrom();
+    }
+
     public int getAppliedDirectiveIndex(Vertex appliedDirective) {
-        List<Edge> adjacentEdges = this.getAdjacentEdgesInverse(appliedDirective);
-        assertTrue(adjacentEdges.size() == 1, () -> format("No applied directive container found for %s", appliedDirective));
+        List<Edge> adjacentEdges = this.getAdjacentEdgesInverseCopied(appliedDirective);
+        assertTrue(adjacentEdges.size() == 1, "No applied directive container found for %s", appliedDirective);
         return Integer.parseInt(adjacentEdges.get(0).getLabel());
     }
 
-
     public Vertex getEnumForEnumValue(Vertex enumValue) {
         List<Vertex> adjacentVertices = this.getAdjacentVerticesInverse(enumValue);
-        assertTrue(adjacentVertices.size() == 1, () -> format("No enum found for %s", enumValue));
+        assertTrue(adjacentVertices.size() == 1, "No enum found for %s", enumValue);
         return adjacentVertices.get(0);
     }
 
@@ -271,4 +298,7 @@ public class SchemaGraph {
         return result;
     }
 
+    public boolean containsEdge(Vertex from, Vertex to) {
+        return this.edges.stream().anyMatch(edge -> edge.getFrom().equals(from) && edge.getTo().equals(to));
+    }
 }

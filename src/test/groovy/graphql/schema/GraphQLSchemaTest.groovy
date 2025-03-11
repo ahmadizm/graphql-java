@@ -5,6 +5,8 @@ import graphql.Directives
 import graphql.ExecutionInput
 import graphql.GraphQL
 import graphql.TestUtil
+import graphql.language.Directive
+import graphql.language.SchemaExtensionDefinition
 import graphql.schema.idl.RuntimeWiring
 import graphql.schema.idl.TypeRuntimeWiring
 import graphql.util.TraversalControl
@@ -129,6 +131,23 @@ class GraphQLSchemaTest extends Specification {
                 ))
     }
 
+    def "schema builder copies extension definitions"() {
+        setup:
+        def schemaBuilder = basicSchemaBuilder()
+        def newDirective = Directive.newDirective().name("pizza").build()
+        def extension = SchemaExtensionDefinition.newSchemaExtensionDefinition().directive(newDirective).build()
+        def oldSchema = schemaBuilder.extensionDefinitions([extension]).build()
+
+        when:
+        def newSchema = GraphQLSchema.newSchema(oldSchema).build()
+
+        then:
+        oldSchema.extensionDefinitions.size() == 1
+        newSchema.extensionDefinitions.size() == 1
+        ((Directive) oldSchema.extensionDefinitions.first().getDirectives().first()).name == "pizza"
+        ((Directive) newSchema.extensionDefinitions.first().getDirectives().first()).name == "pizza"
+    }
+
     def "clear directives works as expected"() {
         setup:
         def schemaBuilder = basicSchemaBuilder()
@@ -136,22 +155,22 @@ class GraphQLSchemaTest extends Specification {
         when: "no additional directives have been specified"
         def schema = schemaBuilder.build()
         then:
-        schema.directives.size() == 4
+        schema.directives.size() == 6
 
         when: "clear directives is called"
         schema = schemaBuilder.clearDirectives().build()
         then:
-        schema.directives.size() == 2 // @deprecated and @specifiedBy is ALWAYS added if missing
+        schema.directives.size() == 4 // @deprecated and @specifiedBy and @oneOf et al is ALWAYS added if missing
 
         when: "clear directives is called with more directives"
         schema = schemaBuilder.clearDirectives().additionalDirective(Directives.SkipDirective).build()
         then:
-        schema.directives.size() == 3
+        schema.directives.size() == 5
 
         when: "the schema is transformed, things are copied"
         schema = schema.transform({ builder -> builder.additionalDirective(Directives.IncludeDirective) })
         then:
-        schema.directives.size() == 4
+        schema.directives.size() == 6
     }
 
     def "clear additional types works as expected"() {
@@ -233,9 +252,7 @@ class GraphQLSchemaTest extends Specification {
         }
             
         union UnionType = Cat | Dog
-            
         '''
-
 
         when:
         def schema = TestUtil.schema(sdl)
@@ -491,7 +508,7 @@ class GraphQLSchemaTest extends Specification {
 
         def newDF = newRegistry.getDataFetcher(dogType, dogType.getField("name"))
         newDF !== nameDF
-        newDF instanceof PropertyDataFetcher // defaulted in
+        newDF instanceof LightDataFetcher // defaulted in
     }
 
     def "can get by field co-ordinate"() {

@@ -1,9 +1,7 @@
 package graphql.schema;
 
-import graphql.DeprecatedAt;
 import graphql.GraphQLContext;
 import graphql.PublicApi;
-import graphql.cachecontrol.CacheControl;
 import graphql.execution.ExecutionId;
 import graphql.execution.ExecutionStepInfo;
 import graphql.execution.MergedField;
@@ -14,6 +12,8 @@ import graphql.language.FragmentDefinition;
 import graphql.language.OperationDefinition;
 import org.dataloader.DataLoader;
 import org.dataloader.DataLoaderRegistry;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 import java.util.Locale;
@@ -65,20 +65,19 @@ public class DelegatingDataFetchingEnvironment implements DataFetchingEnvironmen
         return delegateEnvironment.getArgumentOrDefault(name, defaultValue);
     }
 
-    @Deprecated
-    @DeprecatedAt("2022-04-17")
+    @Deprecated(since = "2022-04-17")
     @Override
     public <T> T getContext() {
         return delegateEnvironment.getContext();
     }
 
     @Override
-    public GraphQLContext getGraphQlContext() {
+    public @NotNull GraphQLContext getGraphQlContext() {
         return delegateEnvironment.getGraphQlContext();
     }
 
     @Override
-    public <T> T getLocalContext() {
+    public <T> @Nullable T getLocalContext() {
         return delegateEnvironment.getLocalContext();
     }
 
@@ -92,8 +91,7 @@ public class DelegatingDataFetchingEnvironment implements DataFetchingEnvironmen
         return delegateEnvironment.getFieldDefinition();
     }
 
-    @Deprecated
-    @DeprecatedAt("2019-10-07")
+    @Deprecated(since = "2019-10-07")
     @Override
     public List<Field> getFields() {
         return delegateEnvironment.getFields();
@@ -150,7 +148,7 @@ public class DelegatingDataFetchingEnvironment implements DataFetchingEnvironmen
     }
 
     @Override
-    public <K, V> DataLoader<K, V> getDataLoader(String dataLoaderName) {
+    public <K, V> @Nullable DataLoader<K, V> getDataLoader(String dataLoaderName) {
         return delegateEnvironment.getDataLoader(dataLoaderName);
     }
 
@@ -162,13 +160,6 @@ public class DelegatingDataFetchingEnvironment implements DataFetchingEnvironmen
     @Override
     public Locale getLocale() {
         return delegateEnvironment.getLocale();
-    }
-
-    @Override
-    @Deprecated
-    @DeprecatedAt("2022-07-26")
-    public CacheControl getCacheControl() {
-        return delegateEnvironment.getCacheControl();
     }
 
     @Override

@@ -2,6 +2,7 @@ package graphql.execution.directives
 
 import graphql.GraphQLContext
 import graphql.TestUtil
+import graphql.execution.CoercedVariables
 import graphql.execution.MergedField
 import spock.lang.Specification
 
@@ -15,6 +16,8 @@ class QueryDirectivesImplTest extends Specification {
         directive @cached(forMillis : Int = 99) on FIELD | QUERY
         
         directive @upper(place : String) on FIELD
+       
+        directive @rep(place : String) repeatable on FIELD
  
         type Query {
             f : String
@@ -23,9 +26,7 @@ class QueryDirectivesImplTest extends Specification {
 
     def schema = TestUtil.schema(sdl)
 
-
     def "can get immediate directives"() {
-
         def f1 = TestUtil.parseField("f1 @cached @upper")
         def f2 = TestUtil.parseField("f2 @cached(forMillis : \$var) @timeout")
 
@@ -66,4 +67,47 @@ class QueryDirectivesImplTest extends Specification {
         appliedResult[1].getArgument("forMillis").getValue() == 10
     }
 
+    def "builder works as expected"() {
+        def f1 = TestUtil.parseField("f1 @cached @upper")
+        def f2 = TestUtil.parseField("f2 @cached(forMillis : \$var) @timeout")
+
+        def mergedField = MergedField.newMergedField([f1, f2]).build()
+
+        def queryDirectives = QueryDirectives.newQueryDirectives()
+                .mergedField(mergedField)
+                .schema(schema)
+                .coercedVariables(CoercedVariables.of([var: 10]))
+                .graphQLContext(GraphQLContext.getDefault())
+                .locale(Locale.getDefault())
+                .build()
+
+        when:
+        def appliedDirectivesByName = queryDirectives.getImmediateAppliedDirectivesByName()
+
+        then:
+        appliedDirectivesByName.keySet().sort() == ["cached", "timeout", "upper"]
+    }
+
+    def "gets repeated definitions"() {
+        def f1 = TestUtil.parseField("f1 @rep(place: \$var) @rep(place: \"HELLO\")")
+
+        def mergedField = MergedField.newMergedField([f1]).build()
+
+        def queryDirectives = QueryDirectives.newQueryDirectives()
+                .mergedField(mergedField)
+                .schema(schema)
+                .coercedVariables(CoercedVariables.of([var: "ABC"]))
+                .graphQLContext(GraphQLContext.getDefault())
+                .locale(Locale.getDefault())
+                .build()
+
+        when:
+        def appliedDirectivesByName = queryDirectives.getImmediateAppliedDirectivesByName()
+
+        then:
+        appliedDirectivesByName.keySet() == ["rep"] as Set
+        appliedDirectivesByName["rep"].size() == 2
+        // Groovy is a pathway to many abilities some consider to be unnatural
+        appliedDirectivesByName["rep"].arguments.value.flatten().sort() == ["ABC", "HELLO"]
+    }
 }

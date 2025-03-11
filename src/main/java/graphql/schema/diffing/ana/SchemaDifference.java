@@ -1250,10 +1250,12 @@ public interface SchemaDifference {
     class AppliedDirectiveObjectFieldLocation implements AppliedDirectiveLocationDetail {
         private final String objectName;
         private final String fieldName;
+        private final String directiveName;
 
-        public AppliedDirectiveObjectFieldLocation(String objectName, String fieldName) {
+        public AppliedDirectiveObjectFieldLocation(String objectName, String fieldName, String directiveName) {
             this.objectName = objectName;
             this.fieldName = fieldName;
+            this.directiveName = directiveName;
         }
 
         public String getFieldName() {
@@ -1263,15 +1265,23 @@ public interface SchemaDifference {
         public String getObjectName() {
             return objectName;
         }
+
+        public String getDirectiveName() {
+            return directiveName;
+        }
     }
 
     class AppliedDirectiveInterfaceFieldLocation implements AppliedDirectiveLocationDetail {
         private final String interfaceName;
         private final String fieldName;
 
-        public AppliedDirectiveInterfaceFieldLocation(String interfaceName, String fieldName) {
+        private final String directiveName;
+
+
+        public AppliedDirectiveInterfaceFieldLocation(String interfaceName, String fieldName, String directiveName) {
             this.interfaceName = interfaceName;
             this.fieldName = fieldName;
+            this.directiveName = directiveName;
         }
 
         public String getFieldName() {
@@ -1281,17 +1291,28 @@ public interface SchemaDifference {
         public String getInterfaceName() {
             return interfaceName;
         }
+
+        public String getDirectiveName() {
+            return directiveName;
+        }
     }
 
     class AppliedDirectiveScalarLocation implements AppliedDirectiveLocationDetail {
         private final String name;
 
-        public AppliedDirectiveScalarLocation(String name) {
+        private final String directiveName;
+
+        public AppliedDirectiveScalarLocation(String name, String directiveName) {
             this.name = name;
+            this.directiveName = directiveName;
         }
 
         public String getName() {
             return name;
+        }
+
+        public String getDirectiveName() {
+            return directiveName;
         }
     }
 
@@ -1301,25 +1322,38 @@ public interface SchemaDifference {
 
     class AppliedDirectiveObjectLocation implements AppliedDirectiveLocationDetail {
         private final String name;
+        private final String directiveName;
 
-        public AppliedDirectiveObjectLocation(String name) {
+
+        public AppliedDirectiveObjectLocation(String name, String directiveName) {
             this.name = name;
+            this.directiveName = directiveName;
         }
 
         public String getName() {
             return name;
+        }
+
+        public String getDirectiveName() {
+            return directiveName;
         }
     }
 
     class AppliedDirectiveInterfaceLocation implements AppliedDirectiveLocationDetail {
         private final String name;
+        private final String directiveName;
 
-        public AppliedDirectiveInterfaceLocation(String name) {
+        public AppliedDirectiveInterfaceLocation(String name, String directiveName) {
             this.name = name;
+            this.directiveName = directiveName;
         }
 
         public String getName() {
             return name;
+        }
+
+        public String getDirectiveName() {
+            return directiveName;
         }
     }
 
@@ -1327,11 +1361,14 @@ public interface SchemaDifference {
         private final String objectName;
         private final String fieldName;
         private final String argumentName;
+        private final String directiveName;
 
-        public AppliedDirectiveObjectFieldArgumentLocation(String objectName, String fieldName, String argumentName) {
+
+        public AppliedDirectiveObjectFieldArgumentLocation(String objectName, String fieldName, String argumentName, String directiveName) {
             this.objectName = objectName;
             this.fieldName = fieldName;
             this.argumentName = argumentName;
+            this.directiveName = directiveName;
         }
 
         public String getObjectName() {
@@ -1345,15 +1382,22 @@ public interface SchemaDifference {
         public String getArgumentName() {
             return argumentName;
         }
+
+        public String getDirectiveName() {
+            return directiveName;
+        }
     }
 
     class AppliedDirectiveDirectiveArgumentLocation implements AppliedDirectiveLocationDetail {
+        // this is the applied directive name
         private final String directiveName;
+        private final String directiveDefinitionName;
         private final String argumentName;
 
-        public AppliedDirectiveDirectiveArgumentLocation(String directiveName, String argumentName) {
-            this.directiveName = directiveName;
+        public AppliedDirectiveDirectiveArgumentLocation(String directiveDefinitionName, String argumentName, String directiveName) {
+            this.directiveDefinitionName = directiveDefinitionName;
             this.argumentName = argumentName;
+            this.directiveName = directiveName;
         }
 
         public String getDirectiveName() {
@@ -1363,17 +1407,24 @@ public interface SchemaDifference {
         public String getArgumentName() {
             return argumentName;
         }
+
+        public String getDirectiveDefinitionName() {
+            return directiveDefinitionName;
+        }
     }
 
     class AppliedDirectiveInterfaceFieldArgumentLocation implements AppliedDirectiveLocationDetail {
         private final String interfaceName;
         private final String fieldName;
         private final String argumentName;
+        private final String directiveName;
 
-        public AppliedDirectiveInterfaceFieldArgumentLocation(String interfaceName, String fieldName, String argumentName) {
+
+        public AppliedDirectiveInterfaceFieldArgumentLocation(String interfaceName, String fieldName, String argumentName, String directiveName) {
             this.interfaceName = interfaceName;
             this.fieldName = fieldName;
             this.argumentName = argumentName;
+            this.directiveName = directiveName;
         }
 
         public String getInterfaceName() {
@@ -1387,39 +1438,60 @@ public interface SchemaDifference {
         public String getArgumentName() {
             return argumentName;
         }
+
+        public String getDirectiveName() {
+            return directiveName;
+        }
     }
 
     class AppliedDirectiveUnionLocation implements AppliedDirectiveLocationDetail {
         private final String name;
+        private final String directiveName;
 
-        public AppliedDirectiveUnionLocation(String name) {
+
+        public AppliedDirectiveUnionLocation(String name, String directiveName) {
             this.name = name;
+            this.directiveName = directiveName;
         }
 
         public String getName() {
             return name;
+        }
+
+        public String getDirectiveName() {
+            return directiveName;
         }
     }
 
     class AppliedDirectiveEnumLocation implements AppliedDirectiveLocationDetail {
         private final String name;
+        private final String directiveName;
 
-        public AppliedDirectiveEnumLocation(String name) {
+
+        public AppliedDirectiveEnumLocation(String name, String directiveName) {
             this.name = name;
+            this.directiveName = directiveName;
         }
 
         public String getName() {
             return name;
+        }
+
+        public String getDirectiveName() {
+            return directiveName;
         }
     }
 
     class AppliedDirectiveEnumValueLocation implements AppliedDirectiveLocationDetail {
         private final String enumName;
         private final String valueName;
+        private final String directiveName;
 
-        public AppliedDirectiveEnumValueLocation(String enumName, String valueName) {
+
+        public AppliedDirectiveEnumValueLocation(String enumName, String valueName, String directiveName) {
             this.enumName = enumName;
             this.valueName = valueName;
+            this.directiveName = directiveName;
         }
 
         public String getEnumName() {
@@ -1429,17 +1501,28 @@ public interface SchemaDifference {
         public String getValueName() {
             return valueName;
         }
+
+        public String getDirectiveName() {
+            return directiveName;
+        }
     }
 
     class AppliedDirectiveInputObjectLocation implements AppliedDirectiveLocationDetail {
         private final String name;
+        private final String directiveName;
 
-        public AppliedDirectiveInputObjectLocation(String name) {
+
+        public AppliedDirectiveInputObjectLocation(String name, String directiveName) {
             this.name = name;
+            this.directiveName = directiveName;
         }
 
         public String getName() {
             return name;
+        }
+
+        public String getDirectiveName() {
+            return directiveName;
         }
     }
 
@@ -1447,10 +1530,13 @@ public interface SchemaDifference {
     class AppliedDirectiveInputObjectFieldLocation implements AppliedDirectiveLocationDetail {
         private final String inputObjectName;
         private final String fieldName;
+        private final String directiveName;
 
-        public AppliedDirectiveInputObjectFieldLocation(String inputObjectName, String fieldName) {
+
+        public AppliedDirectiveInputObjectFieldLocation(String inputObjectName, String fieldName, String directiveName) {
             this.inputObjectName = inputObjectName;
             this.fieldName = fieldName;
+            this.directiveName = directiveName;
         }
 
         public String getInputObjectName() {
@@ -1459,6 +1545,10 @@ public interface SchemaDifference {
 
         public String getFieldName() {
             return fieldName;
+        }
+
+        public String getDirectiveName() {
+            return directiveName;
         }
     }
 
@@ -1519,11 +1609,37 @@ public interface SchemaDifference {
 
     }
 
-    class AppliedDirectiveArgumentAddition {
+    class AppliedDirectiveArgumentAddition implements ObjectModificationDetail,
+            InterfaceModificationDetail,
+            ScalarModificationDetail,
+            EnumModificationDetail,
+            UnionModificationDetail,
+            InputObjectModificationDetail,
+            DirectiveModificationDetail {
+        private final AppliedDirectiveLocationDetail locationDetail;
+        private final String argumentName;
 
+        public AppliedDirectiveArgumentAddition(AppliedDirectiveLocationDetail locationDetail, String argumentName) {
+            this.locationDetail = locationDetail;
+            this.argumentName = argumentName;
+        }
+
+        public AppliedDirectiveLocationDetail getLocationDetail() {
+            return locationDetail;
+        }
+
+        public String getArgumentName() {
+            return argumentName;
+        }
     }
 
-    class AppliedDirectiveArgumentDeletion implements ObjectModificationDetail, InterfaceModificationDetail {
+    class AppliedDirectiveArgumentDeletion implements ObjectModificationDetail,
+            InterfaceModificationDetail,
+            ScalarModificationDetail,
+            EnumModificationDetail,
+            UnionModificationDetail,
+            InputObjectModificationDetail,
+            DirectiveModificationDetail {
         private final AppliedDirectiveLocationDetail locationDetail;
         private final String argumentName;
 
@@ -1542,7 +1658,13 @@ public interface SchemaDifference {
     }
 
 
-    class AppliedDirectiveArgumentValueModification implements ObjectModificationDetail {
+    class AppliedDirectiveArgumentValueModification implements ObjectModificationDetail,
+            InterfaceModificationDetail,
+            InputObjectModificationDetail,
+            EnumModificationDetail,
+            UnionModificationDetail,
+            ScalarModificationDetail,
+            DirectiveModificationDetail {
         private final AppliedDirectiveLocationDetail locationDetail;
         private final String argumentName;
         private final String oldValue;
@@ -1572,7 +1694,7 @@ public interface SchemaDifference {
         }
     }
 
-    class AppliedDirectiveArgumentRename implements ObjectModificationDetail {
+    class AppliedDirectiveArgumentRename implements ObjectModificationDetail, InterfaceModificationDetail {
         private final AppliedDirectiveLocationDetail locationDetail;
         private final String oldName;
         private final String newName;

@@ -27,6 +27,7 @@ public enum ValidationErrorType implements ValidationErrorClassification {
     UnknownDirective,
     MisplacedDirective,
     UndefinedVariable,
+    VariableNotAllowed,
     UnusedVariable,
     FragmentCycle,
     FieldsConflict,
@@ -37,8 +38,11 @@ public enum ValidationErrorType implements ValidationErrorClassification {
     DuplicateFragmentName,
     DuplicateDirectiveName,
     DuplicateArgumentNames,
+    DuplicateIncrementalLabel,
     DuplicateVariableName,
     NullValueForNonNullArgument,
     SubscriptionMultipleRootFields,
-    SubscriptionIntrospectionRootField
+    SubscriptionIntrospectionRootField,
+    UniqueObjectFieldName,
+    UnknownOperation
 }

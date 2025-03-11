@@ -3,6 +3,10 @@ package graphql.schema;
 import graphql.GraphQLException;
 import graphql.Internal;
 import graphql.schema.fetching.LambdaFetchingSupport;
+import graphql.util.EscapeUtil;
+import graphql.util.StringKit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -10,6 +14,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -30,7 +35,6 @@ import static graphql.schema.GraphQLTypeUtil.unwrapOne;
  */
 @Internal
 public class PropertyFetchingImpl {
-
     private final AtomicBoolean USE_SET_ACCESSIBLE = new AtomicBoolean(true);
     private final AtomicBoolean USE_LAMBDA_FACTORY = new AtomicBoolean(true);
     private final AtomicBoolean USE_NEGATIVE_CACHE = new AtomicBoolean(true);
@@ -62,7 +66,7 @@ public class PropertyFetchingImpl {
         }
     }
 
-    public Object getPropertyValue(String propertyName, Object object, GraphQLType graphQLType, boolean dfeInUse, Supplier<Object> singleArgumentValue) {
+    public Object getPropertyValue(String propertyName, Object object, GraphQLType graphQLType, boolean dfeInUse, Supplier<?> singleArgumentValue) {
         if (object instanceof Map) {
             return ((Map<?, ?>) object).get(propertyName);
         }
@@ -108,10 +112,19 @@ public class PropertyFetchingImpl {
 
         Optional<Function<Object, Object>> getterOpt = lambdaGetter(propertyName, object);
         if (getterOpt.isPresent()) {
-            Function<Object, Object> getter = getterOpt.get();
-            cachedFunction = new CachedLambdaFunction(getter);
-            LAMBDA_CACHE.putIfAbsent(cacheKey, cachedFunction);
-            return getter.apply(object);
+            try {
+                Function<Object, Object> getter = getterOpt.get();
+                Object value = getter.apply(object);
+                cachedFunction = new CachedLambdaFunction(getter);
+                LAMBDA_CACHE.putIfAbsent(cacheKey, cachedFunction);
+                return value;
+            } catch (LinkageError | ClassCastException ignored) {
+                //
+                // if we get a linkage error then it maybe that class loader challenges
+                // are preventing the Meta Lambda from working.  So let's continue with
+                // old skool reflection and if it's all broken there then it will eventually
+                // end up negatively cached
+            }
         }
 
         //
@@ -124,7 +137,18 @@ public class PropertyFetchingImpl {
         //
         // try by public getters name -  object.getPropertyName()
         try {
-            MethodFinder methodFinder = (rootClass, methodName) -> findPubliclyAccessibleMethod(cacheKey, rootClass, methodName, dfeInUse);
+            MethodFinder methodFinder = (rootClass, methodName) -> findPubliclyAccessibleMethod(cacheKey, rootClass, methodName, dfeInUse, false);
+            return getPropertyViaGetterMethod(object, propertyName, graphQLType, methodFinder, singleArgumentValue);
+        } catch (NoSuchMethodException ignored) {
+        }
+        //
+        // try by public getters name -  object.getPropertyName() where its static
+        try {
+            // we allow static getXXX() methods because we always have.  It's strange in retrospect but
+            // in order to not break things we allow statics to be used.  In theory this double code check is not needed
+            // because you CANT have a `static getFoo()` and a `getFoo()` in the same class hierarchy but to make the code read clearer
+            // I have repeated the lookup.  Since we cache methods, this happens only once and does not slow us down
+            MethodFinder methodFinder = (rootClass, methodName) -> findPubliclyAccessibleMethod(cacheKey, rootClass, methodName, dfeInUse, true);
             return getPropertyViaGetterMethod(object, propertyName, graphQLType, methodFinder, singleArgumentValue);
         } catch (NoSuchMethodException ignored) {
         }
@@ -170,12 +194,12 @@ public class PropertyFetchingImpl {
         Method apply(Class<?> aClass, String s) throws NoSuchMethodException;
     }
 
-    private Object getPropertyViaRecordMethod(Object object, String propertyName, MethodFinder methodFinder, Supplier<Object> singleArgumentValue) throws NoSuchMethodException {
+    private Object getPropertyViaRecordMethod(Object object, String propertyName, MethodFinder methodFinder, Supplier<?> singleArgumentValue) throws NoSuchMethodException {
         Method method = methodFinder.apply(object.getClass(), propertyName);
         return invokeMethod(object, singleArgumentValue, method, takesSingleArgumentTypeAsOnlyArgument(method));
     }
 
-    private Object getPropertyViaGetterMethod(Object object, String propertyName, GraphQLType graphQLType, MethodFinder methodFinder, Supplier<Object> singleArgumentValue) throws NoSuchMethodException {
+    private Object getPropertyViaGetterMethod(Object object, String propertyName, GraphQLType graphQLType, MethodFinder methodFinder, Supplier<?> singleArgumentValue) throws NoSuchMethodException {
         if (isBooleanProperty(graphQLType)) {
             try {
                 return getPropertyViaGetterUsingPrefix(object, propertyName, "is", methodFinder, singleArgumentValue);
@@ -187,8 +211,8 @@ public class PropertyFetchingImpl {
         }
     }
 
-    private Object getPropertyViaGetterUsingPrefix(Object object, String propertyName, String prefix, MethodFinder methodFinder, Supplier<Object> singleArgumentValue) throws NoSuchMethodException {
-        String getterName = prefix + propertyName.substring(0, 1).toUpperCase() + propertyName.substring(1);
+    private Object getPropertyViaGetterUsingPrefix(Object object, String propertyName, String prefix, MethodFinder methodFinder, Supplier<?> singleArgumentValue) throws NoSuchMethodException {
+        String getterName = prefix + StringKit.capitalize(propertyName);
         Method method = methodFinder.apply(object.getClass(), getterName);
         return invokeMethod(object, singleArgumentValue, method, takesSingleArgumentTypeAsOnlyArgument(method));
     }
@@ -201,7 +225,7 @@ public class PropertyFetchingImpl {
      * which have abstract public interfaces implemented by package-protected
      * (generated) subclasses.
      */
-    private Method findPubliclyAccessibleMethod(CacheKey cacheKey, Class<?> rootClass, String methodName, boolean dfeInUse) throws NoSuchMethodException {
+    private Method findPubliclyAccessibleMethod(CacheKey cacheKey, Class<?> rootClass, String methodName, boolean dfeInUse, boolean allowStaticMethods) throws NoSuchMethodException {
         Class<?> currentClass = rootClass;
         while (currentClass != null) {
             if (Modifier.isPublic(currentClass.getModifiers())) {
@@ -210,7 +234,7 @@ public class PropertyFetchingImpl {
                     // try a getter that takes singleArgumentType first (if we have one)
                     try {
                         Method method = currentClass.getMethod(methodName, singleArgumentType);
-                        if (Modifier.isPublic(method.getModifiers())) {
+                        if (isSuitablePublicMethod(method, allowStaticMethods)) {
                             METHOD_CACHE.putIfAbsent(cacheKey, new CachedMethod(method));
                             return method;
                         }
@@ -219,7 +243,7 @@ public class PropertyFetchingImpl {
                     }
                 }
                 Method method = currentClass.getMethod(methodName);
-                if (Modifier.isPublic(method.getModifiers())) {
+                if (isSuitablePublicMethod(method, allowStaticMethods)) {
                     METHOD_CACHE.putIfAbsent(cacheKey, new CachedMethod(method));
                     return method;
                 }
@@ -228,6 +252,18 @@ public class PropertyFetchingImpl {
         }
         assert rootClass != null;
         return rootClass.getMethod(methodName);
+    }
+
+    private boolean isSuitablePublicMethod(Method method, boolean allowStaticMethods) {
+        int methodModifiers = method.getModifiers();
+        if (Modifier.isPublic(methodModifiers)) {
+            //noinspection RedundantIfStatement
+            if (Modifier.isStatic(methodModifiers) && !allowStaticMethods) {
+                return false;
+            }
+            return true;
+        }
+        return false;
     }
 
     /*
@@ -239,9 +275,11 @@ public class PropertyFetchingImpl {
 
        However, we won't just restrict ourselves strictly to true records.  We will find methods that are record like
        and fetch them - e.g. `object.propertyName()`
+
+       We won't allow static methods for record like methods however
      */
     private Method findRecordMethod(CacheKey cacheKey, Class<?> rootClass, String methodName) throws NoSuchMethodException {
-        return findPubliclyAccessibleMethod(cacheKey,rootClass,methodName,false);
+        return findPubliclyAccessibleMethod(cacheKey, rootClass, methodName, false, false);
     }
 
     private Method findViaSetAccessible(CacheKey cacheKey, Class<?> aClass, String methodName, boolean dfeInUse) throws NoSuchMethodException {
@@ -302,7 +340,7 @@ public class PropertyFetchingImpl {
         }
     }
 
-    private Object invokeMethod(Object object, Supplier<Object> singleArgumentValue, Method method, boolean takesSingleArgument) throws FastNoSuchMethodException {
+    private Object invokeMethod(Object object, Supplier<?> singleArgumentValue, Method method, boolean takesSingleArgument) throws FastNoSuchMethodException {
         try {
             if (takesSingleArgument) {
                 Object argValue = singleArgumentValue.get();
@@ -347,6 +385,7 @@ public class PropertyFetchingImpl {
     public boolean setUseSetAccessible(boolean flag) {
         return USE_SET_ACCESSIBLE.getAndSet(flag);
     }
+
     public boolean setUseLambdaFactory(boolean flag) {
         return USE_LAMBDA_FACTORY.getAndSet(flag);
     }

@@ -20,4 +20,9 @@ public enum SchemaValidationErrorType implements SchemaValidationErrorClassifica
     InvalidAppliedDirective,
     OutputTypeUsedInInputTypeContext,
     InputTypeUsedInOutputTypeContext,
+    OneOfDefaultValueOnField,
+    OneOfNonNullableField,
+    RequiredInputFieldCannotBeDeprecated,
+    RequiredFieldArgumentCannotBeDeprecated,
+    RequiredDirectiveArgumentCannotBeDeprecated
 }

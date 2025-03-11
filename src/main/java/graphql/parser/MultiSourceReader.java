@@ -2,6 +2,7 @@ package graphql.parser;
 
 import graphql.Assert;
 import graphql.PublicApi;
+import graphql.util.LockKit;
 
 import java.io.IOException;
 import java.io.LineNumberReader;
@@ -22,11 +23,31 @@ import java.util.List;
 @PublicApi
 public class MultiSourceReader extends Reader {
 
+    // In Java version 16+, LineNumberReader.read considers end-of-stream to be a line terminator
+    // and will increment the line number, whereas in previous versions it doesn't.
+    private static final boolean LINE_NUMBER_READER_EOS_IS_TERMINATOR;
+
     private final List<SourcePart> sourceParts;
     private final StringBuilder data = new StringBuilder();
     private int currentIndex = 0;
     private int overallLineNumber = 0;
     private final boolean trackData;
+    private final LockKit.ReentrantLock readerLock = new LockKit.ReentrantLock();
+
+    static {
+        LINE_NUMBER_READER_EOS_IS_TERMINATOR = lineNumberReaderEOSIsTerminator();
+    }
+
+    private static boolean lineNumberReaderEOSIsTerminator() {
+        LineNumberReader reader = new LineNumberReader(new StringReader("a"));
+        try {
+            reader.read();
+            reader.read();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return reader.getLineNumber() > 0;
+    }
 
 
     private MultiSourceReader(Builder builder) {
@@ -37,19 +58,28 @@ public class MultiSourceReader extends Reader {
     @Override
     public int read(char[] cbuf, int off, int len) throws IOException {
         while (true) {
-            synchronized (this) {
+            readerLock.lock();
+            try {
                 if (currentIndex >= sourceParts.size()) {
                     return -1;
                 }
                 SourcePart sourcePart = sourceParts.get(currentIndex);
                 int read = sourcePart.lineReader.read(cbuf, off, len);
-                overallLineNumber = calcLineNumber();
                 if (read == -1) {
                     currentIndex++;
-                } else {
+                    sourcePart.reachedEndOfStream = true;
+                } else if (read > 0) {
+                    sourcePart.lastRead = cbuf[off + read - 1];
+                }
+                // note: calcLineNumber() must be called after updating sourcePart.reachedEndOfStream
+                // and sourcePart.lastRead
+                overallLineNumber = calcLineNumber();
+                if (read != -1) {
                     trackData(cbuf, off, read);
                     return read;
                 }
+            } finally {
+                readerLock.unlock();
             }
         }
     }
@@ -63,7 +93,7 @@ public class MultiSourceReader extends Reader {
     private int calcLineNumber() {
         int linenumber = 0;
         for (SourcePart sourcePart : sourceParts) {
-            linenumber += sourcePart.lineReader.getLineNumber();
+            linenumber += sourcePart.getLineNumber();
         }
         return linenumber;
     }
@@ -120,7 +150,7 @@ public class MultiSourceReader extends Reader {
             sourceAndLine.sourceName = sourcePart.sourceName;
             if (sourcePart == currentPart) {
                 // we cant go any further
-                int partLineNumber = currentPart.lineReader.getLineNumber();
+                int partLineNumber = currentPart.getLineNumber();
                 previousPage = page;
                 page += partLineNumber;
                 if (page > overallLineNumber) {
@@ -131,7 +161,7 @@ public class MultiSourceReader extends Reader {
                 return sourceAndLine;
             } else {
                 previousPage = page;
-                int partLineNumber = sourcePart.lineReader.getLineNumber();
+                int partLineNumber = sourcePart.getLineNumber();
                 page += partLineNumber;
                 if (page > overallLineNumber) {
                     sourceAndLine.line = overallLineNumber - previousPage;
@@ -147,22 +177,22 @@ public class MultiSourceReader extends Reader {
      * @return the line number of the current source.  This is zeroes based like {@link java.io.LineNumberReader#getLineNumber()}
      */
     public int getLineNumber() {
-        synchronized (this) {
+        return readerLock.callLocked(() -> {
             if (sourceParts.isEmpty()) {
                 return 0;
             }
             if (currentIndex >= sourceParts.size()) {
-                return sourceParts.get(sourceParts.size() - 1).lineReader.getLineNumber();
+                return sourceParts.get(sourceParts.size() - 1).getLineNumber();
             }
-            return sourceParts.get(currentIndex).lineReader.getLineNumber();
-        }
+            return sourceParts.get(currentIndex).getLineNumber();
+        });
     }
 
     /**
      * @return The name of the current source
      */
     public String getSourceName() {
-        synchronized (this) {
+        return readerLock.callLocked(() -> {
             if (sourceParts.isEmpty()) {
                 return null;
             }
@@ -170,7 +200,7 @@ public class MultiSourceReader extends Reader {
                 return sourceParts.get(sourceParts.size() - 1).sourceName;
             }
             return sourceParts.get(currentIndex).sourceName;
-        }
+        });
     }
 
     /**
@@ -198,13 +228,16 @@ public class MultiSourceReader extends Reader {
 
     @Override
     public void close() throws IOException {
-        synchronized (this) {
+        readerLock.lock();
+        try {
             for (SourcePart sourcePart : sourceParts) {
                 if (!sourcePart.closed) {
                     sourcePart.lineReader.close();
                     sourcePart.closed = true;
                 }
             }
+        } finally {
+            readerLock.unlock();
         }
     }
 
@@ -212,6 +245,24 @@ public class MultiSourceReader extends Reader {
         String sourceName;
         LineNumberReader lineReader;
         boolean closed;
+        char lastRead;
+        boolean reachedEndOfStream = false;
+
+        /**
+         * This handles the discrepancy between LineNumberReader.getLineNumber() for Java versions
+         * 16+ vs below. Use this instead of lineReader.getLineNumber() directly.
+         * @return The current line number. EOS is not considered a line terminator.
+         */
+        int getLineNumber() {
+            int lineNumber = lineReader.getLineNumber();
+            if (reachedEndOfStream
+                    && LINE_NUMBER_READER_EOS_IS_TERMINATOR
+                    && lastRead != '\r'
+                    && lastRead != '\n') {
+                return Math.max(lineNumber - 1, 0);
+            }
+            return lineNumber;
+        }
     }
 
 

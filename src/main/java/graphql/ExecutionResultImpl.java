@@ -40,6 +40,10 @@ public class ExecutionResultImpl implements ExecutionResult {
         this(other.dataPresent, other.data, other.errors, other.extensions);
     }
 
+    public <T extends Builder<T>> ExecutionResultImpl(Builder<T> builder) {
+        this(builder.dataPresent, builder.data, builder.errors, builder.extensions);
+    }
+
     private ExecutionResultImpl(boolean dataPresent, Object data, List<? extends GraphQLError> errors, Map<Object, Object> extensions) {
         this.dataPresent = dataPresent;
         this.data = data;
@@ -93,6 +97,24 @@ public class ExecutionResultImpl implements ExecutionResult {
         return map(errors, GraphQLError::toSpecification);
     }
 
+    @SuppressWarnings("unchecked")
+    static ExecutionResult fromSpecification(Map<String, Object> specificationMap) {
+        ExecutionResult.Builder<?> builder = ExecutionResult.newExecutionResult();
+        Object data = specificationMap.get("data");
+        if (data != null) {
+            builder.data(data);
+        }
+        List<Map<String, Object>> errors = (List<Map<String, Object>>) specificationMap.get("errors");
+        if (errors != null) {
+            builder.errors(GraphqlErrorHelper.fromSpecification(errors));
+        }
+        Map<Object, Object> extensions = (Map<Object, Object>) specificationMap.get("extensions");
+        if (extensions != null) {
+            builder.extensions(extensions);
+        }
+        return builder.build();
+    }
+
     @Override
     public String toString() {
         return "ExecutionResultImpl{" +
@@ -103,61 +125,61 @@ public class ExecutionResultImpl implements ExecutionResult {
                 '}';
     }
 
-    public static Builder newExecutionResult() {
-        return new Builder();
+    public static <T extends Builder<T>> Builder<T> newExecutionResult() {
+        return new Builder<>();
     }
 
-    public static class Builder implements ExecutionResult.Builder<Builder> {
+    public static class Builder<T extends Builder<T>> implements ExecutionResult.Builder<T> {
         private boolean dataPresent;
         private Object data;
         private List<GraphQLError> errors = new ArrayList<>();
         private Map<Object, Object> extensions;
 
         @Override
-        public Builder from(ExecutionResult executionResult) {
+        public T from(ExecutionResult executionResult) {
             dataPresent = executionResult.isDataPresent();
             data = executionResult.getData();
             errors = new ArrayList<>(executionResult.getErrors());
             extensions = executionResult.getExtensions();
-            return this;
+            return (T) this;
         }
 
         @Override
-        public Builder data(Object data) {
+        public T data(Object data) {
             dataPresent = true;
             this.data = data;
-            return this;
+            return (T) this;
         }
 
         @Override
-        public Builder errors(List<GraphQLError> errors) {
+        public T errors(List<GraphQLError> errors) {
             this.errors = errors;
-            return this;
+            return (T) this;
         }
 
         @Override
-        public Builder addErrors(List<GraphQLError> errors) {
+        public T addErrors(List<GraphQLError> errors) {
             this.errors.addAll(errors);
-            return this;
+            return (T) this;
         }
 
         @Override
-        public Builder addError(GraphQLError error) {
+        public T addError(GraphQLError error) {
             this.errors.add(error);
-            return this;
+            return (T) this;
         }
 
         @Override
-        public Builder extensions(Map<Object, Object> extensions) {
+        public T extensions(Map<Object, Object> extensions) {
             this.extensions = extensions;
-            return this;
+            return (T) this;
         }
 
         @Override
-        public Builder addExtension(String key, Object value) {
+        public T addExtension(String key, Object value) {
             this.extensions = (this.extensions == null ? new LinkedHashMap<>() : this.extensions);
             this.extensions.put(key, value);
-            return this;
+            return (T) this;
         }
 
         @Override

@@ -1,6 +1,5 @@
 package graphql.schema.idl
 
-
 import graphql.TestUtil
 import graphql.introspection.Introspection
 import graphql.language.Node
@@ -9,9 +8,7 @@ import graphql.schema.DataFetcherFactory
 import graphql.schema.DataFetcherFactoryEnvironment
 import graphql.schema.DataFetchingEnvironment
 import graphql.schema.GraphQLAppliedDirective
-import graphql.schema.GraphQLArgument
 import graphql.schema.GraphQLCodeRegistry
-import graphql.schema.GraphQLDirective
 import graphql.schema.GraphQLDirectiveContainer
 import graphql.schema.GraphQLEnumType
 import graphql.schema.GraphQLFieldDefinition
@@ -1773,7 +1770,8 @@ class SchemaGeneratorTest extends Specification {
 
         def appliedDirective = f1.getAppliedDirective("deprecated")
         appliedDirective.name == "deprecated"
-        appliedDirective.getArgument("reason").type == GraphQLString
+        appliedDirective.getArgument("reason").type instanceof GraphQLNonNull
+        (appliedDirective.getArgument("reason").type as GraphQLNonNull).wrappedType == GraphQLString
         printAst(appliedDirective.getArgument("reason").argumentValue.value as Node) == '"No longer supported"'
 
         when:
@@ -1784,7 +1782,8 @@ class SchemaGeneratorTest extends Specification {
 
         def appliedDirective2 = f2.getAppliedDirective("deprecated")
         appliedDirective2.name == "deprecated"
-        appliedDirective2.getArgument("reason").type == GraphQLString
+        appliedDirective2.getArgument("reason").type instanceof GraphQLNonNull
+        (appliedDirective2.getArgument("reason").type as GraphQLNonNull).wrappedType == GraphQLString
         printAst(appliedDirective2.getArgument("reason").argumentValue.value as Node) == '"Just because"'
         def directive2 = f2.getDirective("deprecated")
         printAst(directive2.getArgument("reason").argumentDefaultValue.value as Node) == '"No longer supported"'
@@ -1818,32 +1817,6 @@ class SchemaGeneratorTest extends Specification {
         GraphQLSchema schema = new SchemaGenerator().makeExecutableSchema(types, wiring)
         expect:
         assert schema != null
-    }
-
-    def "transformers get called once the schema is built"() {
-        def spec = """
-          type Query {
-              hello: String
-          }
-      """
-
-        def types = new SchemaParser().parse(spec)
-
-        def extraDirective = (GraphQLDirective.newDirective()).name("extra")
-                .argument(GraphQLArgument.newArgument().name("value").type(GraphQLString)).build()
-        def transformer = new SchemaGeneratorPostProcessing() {  // Retained to show deprecated code is still run
-            @Override
-            GraphQLSchema process(GraphQLSchema originalSchema) {
-                originalSchema.transform({ builder -> builder.additionalDirective(extraDirective) })
-            }
-        }
-        def wiring = RuntimeWiring.newRuntimeWiring()
-                .transformer(transformer) // Retained to show deprecated code is still run
-                .build()
-        GraphQLSchema schema = new SchemaGenerator().makeExecutableSchema(types, wiring)
-        expect:
-        assert schema != null
-        schema.getDirective("extra") != null
     }
 
     def "enum object default values are handled"() {
@@ -2052,11 +2025,13 @@ class SchemaGeneratorTest extends Specification {
         directives = schema.getDirectives()
 
         then:
-        directives.size() == 7 // built in ones :  include / skip and deprecated
+        directives.size() == 9 // built in ones :  include / skip and deprecated
         def directiveNames = directives.collect { it.name }
         directiveNames.contains("include")
         directiveNames.contains("skip")
         directiveNames.contains("deprecated")
+        directiveNames.contains("specifiedBy")
+        directiveNames.contains("oneOf")
         directiveNames.contains("sd1")
         directiveNames.contains("sd2")
         directiveNames.contains("sd3")
@@ -2065,10 +2040,11 @@ class SchemaGeneratorTest extends Specification {
         directivesMap = schema.getDirectivesByName()
 
         then:
-        directivesMap.size() == 7 // built in ones
+        directivesMap.size() == 9 // built in ones
         directivesMap.containsKey("include")
         directivesMap.containsKey("skip")
         directivesMap.containsKey("deprecated")
+        directivesMap.containsKey("oneOf")
         directivesMap.containsKey("sd1")
         directivesMap.containsKey("sd2")
         directivesMap.containsKey("sd3")
@@ -2308,6 +2284,11 @@ class SchemaGeneratorTest extends Specification {
             DataFetcher get(DataFetcherFactoryEnvironment environment) {
                 return df
             }
+
+            @Override
+            DataFetcher get(GraphQLFieldDefinition fieldDefinition) {
+                return df
+            }
         }
 
         GraphQLCodeRegistry codeRegistry = newCodeRegistry()
@@ -2535,5 +2516,27 @@ class SchemaGeneratorTest extends Specification {
         then:
         newSchema.getDirectives().findAll { it.name == "skip" }.size() == 1
         newSchema.getDirectives().findAll { it.name == "include" }.size() == 1
+    }
+
+    def "oneOf directive is available implicitly"() {
+        def sdl = '''
+            type Query {
+                f(arg : OneOfInputType) : String
+            }
+            
+            input OneOfInputType @oneOf {
+                a : String
+                b : String
+            }
+        '''
+
+        when:
+        def schema = TestUtil.schema(sdl)
+        then:
+        schema.getDirectives().findAll { it.name == "oneOf" }.size() == 1
+
+        GraphQLInputObjectType inputObjectType = schema.getTypeAs("OneOfInputType")
+        inputObjectType.isOneOf()
+        inputObjectType.hasAppliedDirective("oneOf")
     }
 }

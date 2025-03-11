@@ -7,6 +7,8 @@ class ParserOptionsTest extends Specification {
     static defaultOperationOptions = ParserOptions.getDefaultOperationParserOptions()
     static defaultSdlOptions = ParserOptions.getDefaultSdlParserOptions()
 
+    static final int ONE_MB = 1024 * 1024
+
     void setup() {
         ParserOptions.setDefaultParserOptions(defaultOptions)
         ParserOptions.setDefaultOperationParserOptions(defaultOperationOptions)
@@ -21,34 +23,52 @@ class ParserOptionsTest extends Specification {
 
     def "lock in default settings"() {
         expect:
+        defaultOptions.getMaxCharacters() == ONE_MB
         defaultOptions.getMaxTokens() == 15_000
         defaultOptions.getMaxWhitespaceTokens() == 200_000
         defaultOptions.isCaptureSourceLocation()
         defaultOptions.isCaptureLineComments()
         !defaultOptions.isCaptureIgnoredChars()
         defaultOptions.isReaderTrackData()
+        !defaultOptions.isRedactTokenParserErrorMessages()
 
         defaultOperationOptions.getMaxTokens() == 15_000
         defaultOperationOptions.getMaxWhitespaceTokens() == 200_000
         defaultOperationOptions.isCaptureSourceLocation()
         !defaultOperationOptions.isCaptureLineComments()
         !defaultOperationOptions.isCaptureIgnoredChars()
-        defaultOptions.isReaderTrackData()
+        defaultOperationOptions.isReaderTrackData()
+        !defaultOperationOptions.isRedactTokenParserErrorMessages()
 
+        defaultSdlOptions.getMaxCharacters() == Integer.MAX_VALUE
         defaultSdlOptions.getMaxTokens() == Integer.MAX_VALUE
         defaultSdlOptions.getMaxWhitespaceTokens() == Integer.MAX_VALUE
         defaultSdlOptions.isCaptureSourceLocation()
         defaultSdlOptions.isCaptureLineComments()
         !defaultSdlOptions.isCaptureIgnoredChars()
-        defaultOptions.isReaderTrackData()
+        defaultSdlOptions.isReaderTrackData()
+        !defaultSdlOptions.isRedactTokenParserErrorMessages()
     }
 
     def "can set in new option JVM wide"() {
-        def newDefaultOptions = defaultOptions.transform({ it.captureIgnoredChars(true).readerTrackData(false) })
+        def newDefaultOptions = defaultOptions.transform({
+            it.captureIgnoredChars(true)
+                    .readerTrackData(false)
+                    .redactTokenParserErrorMessages(true)
+        })
         def newDefaultOperationOptions = defaultOperationOptions.transform(
-                { it.captureIgnoredChars(true).captureLineComments(true).maxWhitespaceTokens(300_000) })
+                {
+                    it.captureIgnoredChars(true)
+                            .captureLineComments(true)
+                            .maxCharacters(1_000_000)
+                            .maxWhitespaceTokens(300_000)
+                })
         def newDefaultSDlOptions = defaultSdlOptions.transform(
-                { it.captureIgnoredChars(true).captureLineComments(true).maxWhitespaceTokens(300_000) })
+                {
+                    it.captureIgnoredChars(true)
+                            .captureLineComments(true)
+                            .maxWhitespaceTokens(300_000)
+                })
 
         when:
         ParserOptions.setDefaultParserOptions(newDefaultOptions)
@@ -61,25 +81,31 @@ class ParserOptionsTest extends Specification {
 
         then:
 
+        currentDefaultOptions.getMaxCharacters() == ONE_MB
         currentDefaultOptions.getMaxTokens() == 15_000
         currentDefaultOptions.getMaxWhitespaceTokens() == 200_000
         currentDefaultOptions.isCaptureSourceLocation()
         currentDefaultOptions.isCaptureLineComments()
         currentDefaultOptions.isCaptureIgnoredChars()
         !currentDefaultOptions.isReaderTrackData()
+        currentDefaultOptions.isRedactTokenParserErrorMessages()
 
+        currentDefaultOperationOptions.getMaxCharacters() == 1_000_000
         currentDefaultOperationOptions.getMaxTokens() == 15_000
         currentDefaultOperationOptions.getMaxWhitespaceTokens() == 300_000
         currentDefaultOperationOptions.isCaptureSourceLocation()
         currentDefaultOperationOptions.isCaptureLineComments()
         currentDefaultOperationOptions.isCaptureIgnoredChars()
         currentDefaultOperationOptions.isReaderTrackData()
+        !currentDefaultOperationOptions.isRedactTokenParserErrorMessages()
 
+        currentDefaultSdlOptions.getMaxCharacters() == Integer.MAX_VALUE
         currentDefaultSdlOptions.getMaxTokens() == Integer.MAX_VALUE
         currentDefaultSdlOptions.getMaxWhitespaceTokens() == 300_000
         currentDefaultSdlOptions.isCaptureSourceLocation()
         currentDefaultSdlOptions.isCaptureLineComments()
         currentDefaultSdlOptions.isCaptureIgnoredChars()
         currentDefaultSdlOptions.isReaderTrackData()
+        !currentDefaultSdlOptions.isRedactTokenParserErrorMessages()
     }
 }

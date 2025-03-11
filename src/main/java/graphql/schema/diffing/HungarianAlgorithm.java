@@ -1,6 +1,5 @@
 package graphql.schema.diffing;
 
-import com.google.common.util.concurrent.AtomicDoubleArray;
 import graphql.Internal;
 
 import java.util.Arrays;
@@ -35,7 +34,6 @@ import java.util.Arrays;
  * one worker and so that no worker is assigned to more than one job in such a
  * manner so as to minimize the total cost of completing the jobs.
  * <p>
- * <p>
  * An assignment for a cost matrix that has more workers than jobs will
  * necessarily include unassigned workers, indicated by an assignment value of
  * -1; in no other circumstance will there be unassigned workers. Similarly, an
@@ -43,7 +41,6 @@ import java.util.Arrays;
  * include unassigned jobs; in no other circumstance will there be unassigned
  * jobs. For completeness, an assignment for a square cost matrix will give
  * exactly one unique worker to each job.
- * <p>
  * <p>
  * This version of the Hungarian algorithm runs in time O(n^3), where n is the
  * maximum among the number of workers and the number of jobs.
@@ -53,7 +50,7 @@ import java.util.Arrays;
 @Internal
 public class HungarianAlgorithm {
     // changed by reduce
-    public final AtomicDoubleArray[] costMatrix;
+    public final double[][] costMatrix;
 
     // constant always
     private final int rows;
@@ -85,10 +82,10 @@ public class HungarianAlgorithm {
      *                   irregular in the sense that all rows must be the same length; in
      *                   addition, all entries must be non-infinite numbers.
      */
-    public HungarianAlgorithm(AtomicDoubleArray[] costMatrix) {
-        this.dim = Math.max(costMatrix.length, costMatrix[0].length());
+    public HungarianAlgorithm(double[][] costMatrix) {
+        this.dim = Math.max(costMatrix.length, costMatrix[0].length);
         this.rows = costMatrix.length;
-        this.cols = costMatrix[0].length();
+        this.cols = costMatrix[0].length;
         this.costMatrix = costMatrix;
 //        for (int w = 0; w < this.dim; w++) {
 //            if (w < costMatrix.length) {
@@ -131,8 +128,8 @@ public class HungarianAlgorithm {
         }
         for (int w = 0; w < dim; w++) {
             for (int j = 0; j < dim; j++) {
-                if (costMatrix[w].get(j) < labelByJob[j]) {
-                    labelByJob[j] = costMatrix[w].get(j);
+                if (costMatrix[w][j] < labelByJob[j]) {
+                    labelByJob[j] = costMatrix[w][j];
                 }
             }
         }
@@ -180,7 +177,6 @@ public class HungarianAlgorithm {
      * the minimum slack among committed workers and non-committed jobs to create
      * more zero-slack edges (the labels of committed jobs are simultaneously
      * decreased by the same amount in order to maintain a feasible labeling).
-     * <p>
      * <p>
      * The runtime of a single phase of the algorithm is O(n^2), where n is the
      * dimension of the internal square cost matrix, since each edge is visited at
@@ -241,7 +237,7 @@ public class HungarianAlgorithm {
                 committedWorkers[worker] = true;
                 for (int j = 0; j < dim; j++) {
                     if (parentWorkerByCommittedJob[j] == -1) {
-                        double slack = costMatrix[worker].get(j) - labelByWorker[worker]
+                        double slack = costMatrix[worker][j] - labelByWorker[worker]
                                 - labelByJob[j];
                         if (minSlackValueByJob[j] > slack) {
                             minSlackValueByJob[j] = slack;
@@ -274,7 +270,7 @@ public class HungarianAlgorithm {
         for (int w = 0; w < dim; w++) {
             for (int j = 0; j < dim; j++) {
                 if (matchJobByWorker[w] == -1 && matchWorkerByJob[j] == -1
-                        && costMatrix[w].get(j) - labelByWorker[w] - labelByJob[j] == 0) {
+                        && costMatrix[w][j] - labelByWorker[w] - labelByJob[j] == 0) {
                     match(w, j);
                 }
             }
@@ -293,13 +289,16 @@ public class HungarianAlgorithm {
         Arrays.fill(parentWorkerByCommittedJob, -1);
         committedWorkers[w] = true;
         for (int j = 0; j < dim; j++) {
-            minSlackValueByJob[j] = costMatrix[w].get(j) - labelByWorker[w] - labelByJob[j];
+            minSlackValueByJob[j] = costMatrix[w][j] - labelByWorker[w] - labelByJob[j];
             minSlackWorkerByJob[j] = w;
         }
     }
 
     /**
      * Helper method to record a matching between worker w and job j.
+     *
+     * @param w the worker
+     * @param j the job
      */
     protected void match(int w, int j) {
         matchJobByWorker[w] = j;
@@ -316,12 +315,12 @@ public class HungarianAlgorithm {
         for (int w = 0; w < dim; w++) {
             double min = Double.POSITIVE_INFINITY;
             for (int j = 0; j < dim; j++) {
-                if (costMatrix[w].get(j) < min) {
-                    min = costMatrix[w].get(j);
+                if (costMatrix[w][j] < min) {
+                    min = costMatrix[w][j];
                 }
             }
             for (int j = 0; j < dim; j++) {
-                costMatrix[w].set(j, costMatrix[w].get(j) - min);
+                costMatrix[w][j] = costMatrix[w][j] - min;
             }
         }
         double[] min = new double[dim];
@@ -330,14 +329,14 @@ public class HungarianAlgorithm {
         }
         for (int w = 0; w < dim; w++) {
             for (int j = 0; j < dim; j++) {
-                if (costMatrix[w].get(j) < min[j]) {
-                    min[j] = costMatrix[w].get(j);
+                if (costMatrix[w][j] < min[j]) {
+                    min[j] = costMatrix[w][j];
                 }
             }
         }
         for (int w = 0; w < dim; w++) {
             for (int j = 0; j < dim; j++) {
-                costMatrix[w].set(j, costMatrix[w].get(j) - min[j]);
+                costMatrix[w][j] = costMatrix[w][j] - min[j];
             }
         }
     }
@@ -346,6 +345,8 @@ public class HungarianAlgorithm {
      * Update labels with the specified slack by adding the slack value for
      * committed workers and by subtracting the slack value for committed jobs. In
      * addition, update the minimum slack values appropriately.
+     *
+     * @param slack the specified slack
      */
     protected void updateLabeling(double slack) {
         for (int w = 0; w < dim; w++) {
@@ -365,7 +366,7 @@ public class HungarianAlgorithm {
     public int[] nextChild() {
         int currentJobAssigned = matchJobByWorker[0];
         // we want to make currentJobAssigned not allowed,meaning we set the size to Infinity
-        costMatrix[0].set(currentJobAssigned, Integer.MAX_VALUE);
+        costMatrix[0][currentJobAssigned] = Integer.MAX_VALUE;
         matchWorkerByJob[currentJobAssigned] = -1;
         matchJobByWorker[0] = -1;
         minSlackValueByJob[currentJobAssigned] = Integer.MAX_VALUE;

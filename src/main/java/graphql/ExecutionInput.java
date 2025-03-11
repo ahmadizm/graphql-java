@@ -1,10 +1,8 @@
 package graphql;
 
-import graphql.cachecontrol.CacheControl;
 import graphql.collect.ImmutableKit;
 import graphql.execution.ExecutionId;
 import graphql.execution.RawVariables;
-import graphql.execution.instrumentation.dataloader.DataLoaderDispatcherInstrumentationState;
 import org.dataloader.DataLoaderRegistry;
 
 import java.util.Locale;
@@ -13,6 +11,7 @@ import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 import static graphql.Assert.assertNotNull;
+import static graphql.execution.instrumentation.dataloader.EmptyDataLoaderRegistryInstance.EMPTY_DATALOADER_REGISTRY;
 
 /**
  * This represents the series of values that can be input on a graphql query execution
@@ -28,7 +27,6 @@ public class ExecutionInput {
     private final RawVariables rawVariables;
     private final Map<String, Object> extensions;
     private final DataLoaderRegistry dataLoaderRegistry;
-    private final CacheControl cacheControl;
     private final ExecutionId executionId;
     private final Locale locale;
 
@@ -42,7 +40,6 @@ public class ExecutionInput {
         this.root = builder.root;
         this.rawVariables = builder.rawVariables;
         this.dataLoaderRegistry = builder.dataLoaderRegistry;
-        this.cacheControl = builder.cacheControl;
         this.executionId = builder.executionId;
         this.locale = builder.locale != null ? builder.locale : Locale.getDefault(); // always have a locale in place
         this.localContext = builder.localContext;
@@ -71,8 +68,7 @@ public class ExecutionInput {
      *
      * @deprecated - use {@link #getGraphQLContext()}
      */
-    @Deprecated
-    @DeprecatedAt("2021-07-05")
+    @Deprecated(since = "2021-07-05")
     public Object getContext() {
         return context;
     }
@@ -119,16 +115,6 @@ public class ExecutionInput {
         return dataLoaderRegistry;
     }
 
-    /**
-     * @return the cache control helper associated with this execution
-     *
-     * @deprecated - Apollo has deprecated the Cache Control specification
-     */
-    @Deprecated
-    @DeprecatedAt("2022-07-26")
-    public CacheControl getCacheControl() {
-        return cacheControl;
-    }
 
     /**
      * @return Id that will be/was used to execute this operation.
@@ -170,7 +156,6 @@ public class ExecutionInput {
                 .localContext(this.localContext)
                 .root(this.root)
                 .dataLoaderRegistry(this.dataLoaderRegistry)
-                .cacheControl(this.cacheControl)
                 .variables(this.rawVariables.toMap())
                 .extensions(this.extensions)
                 .executionId(this.executionId)
@@ -228,9 +213,7 @@ public class ExecutionInput {
         // this is important - it allows code to later known if we never really set a dataloader and hence it can optimize
         // dataloader field tracking away.
         //
-        private DataLoaderRegistry dataLoaderRegistry = DataLoaderDispatcherInstrumentationState.EMPTY_DATALOADER_REGISTRY;
-        @DeprecatedAt("2022-07-26")
-        private CacheControl cacheControl = CacheControl.newCacheControl();
+        private DataLoaderRegistry dataLoaderRegistry = EMPTY_DATALOADER_REGISTRY;
         private Locale locale = Locale.getDefault();
         private ExecutionId executionId;
 
@@ -289,47 +272,13 @@ public class ExecutionInput {
          *
          * @deprecated - the {@link ExecutionInput#getGraphQLContext()} is a fixed mutable instance now
          */
-        @Deprecated
-        @DeprecatedAt("2021-07-05")
+        @Deprecated(since = "2021-07-05")
         public Builder context(Object context) {
             this.context = context;
             return this;
         }
 
-        /**
-         * The legacy context object
-         *
-         * @param contextBuilder the context builder object to use
-         *
-         * @return this builder
-         *
-         * @deprecated - the {@link ExecutionInput#getGraphQLContext()} is a fixed mutable instance now
-         */
-        @Deprecated
-        @DeprecatedAt("2021-07-05")
-        public Builder context(GraphQLContext.Builder contextBuilder) {
-            this.context = contextBuilder.build();
-            return this;
-        }
-
-        /**
-         * The legacy context object
-         *
-         * @param contextBuilderFunction the context builder function to use
-         *
-         * @return this builder
-         *
-         * @deprecated - the {@link ExecutionInput#getGraphQLContext()} is a fixed mutable instance now
-         */
-        @Deprecated
-        @DeprecatedAt("2021-07-05")
-        public Builder context(UnaryOperator<GraphQLContext.Builder> contextBuilderFunction) {
-            GraphQLContext.Builder builder = GraphQLContext.newContext();
-            builder = contextBuilderFunction.apply(builder);
-            return context(builder.build());
-        }
-
-        /**
+         /**
          * This will give you a builder of {@link GraphQLContext} and any values you set will be copied
          * into the underlying {@link GraphQLContext} of this execution input
          *
@@ -396,13 +345,6 @@ public class ExecutionInput {
          */
         public Builder dataLoaderRegistry(DataLoaderRegistry dataLoaderRegistry) {
             this.dataLoaderRegistry = assertNotNull(dataLoaderRegistry);
-            return this;
-        }
-
-        @Deprecated
-        @DeprecatedAt("2022-07-26")
-        public Builder cacheControl(CacheControl cacheControl) {
-            this.cacheControl = assertNotNull(cacheControl);
             return this;
         }
 

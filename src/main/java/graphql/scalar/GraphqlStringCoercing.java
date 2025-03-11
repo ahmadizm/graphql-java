@@ -85,7 +85,7 @@ public class GraphqlStringCoercing implements Coercing<String, String> {
 
     @Override
     @Deprecated
-    public Value valueToLiteral(@NotNull Object input) {
+    public @NotNull Value<?> valueToLiteral(@NotNull Object input) {
         return valueToLiteralImpl(input);
     }
 

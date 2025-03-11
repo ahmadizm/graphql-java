@@ -6,6 +6,11 @@ import graphql.i18n.I18n;
 import graphql.language.Document;
 import graphql.schema.GraphQLSchema;
 import graphql.validation.rules.ArgumentsOfCorrectType;
+import graphql.validation.rules.DeferDirectiveLabel;
+import graphql.validation.rules.DeferDirectiveOnRootLevel;
+import graphql.validation.rules.DeferDirectiveOnValidOperation;
+import graphql.validation.rules.KnownOperationTypes;
+import graphql.validation.rules.UniqueObjectFieldName;
 import graphql.validation.rules.ExecutableDefinitions;
 import graphql.validation.rules.FieldsOnCorrectType;
 import graphql.validation.rules.FragmentsOnCompositeType;
@@ -47,7 +52,7 @@ public class Validator {
      * `graphql-java` will stop validation after a maximum number of validation messages has been reached.  Attackers
      * can send pathologically invalid queries to induce a Denial of Service attack and fill memory with 10000s of errors
      * and burn CPU in process.
-     *
+     * <p>
      * By default, this is set to 100 errors.  You can set a new JVM wide value as the maximum allowed validation errors.
      *
      * @param maxValidationErrors the maximum validation errors allow JVM wide
@@ -152,6 +157,21 @@ public class Validator {
 
         SubscriptionUniqueRootField uniqueSubscriptionRootField = new SubscriptionUniqueRootField(validationContext, validationErrorCollector);
         rules.add(uniqueSubscriptionRootField);
+
+        UniqueObjectFieldName uniqueObjectFieldName = new UniqueObjectFieldName(validationContext, validationErrorCollector);
+        rules.add(uniqueObjectFieldName);
+
+        DeferDirectiveOnRootLevel deferDirectiveOnRootLevel = new DeferDirectiveOnRootLevel(validationContext, validationErrorCollector);
+        rules.add(deferDirectiveOnRootLevel);
+
+        DeferDirectiveOnValidOperation deferDirectiveOnValidOperation = new DeferDirectiveOnValidOperation(validationContext, validationErrorCollector);
+        rules.add(deferDirectiveOnValidOperation);
+
+        DeferDirectiveLabel deferDirectiveLabel = new DeferDirectiveLabel(validationContext, validationErrorCollector);
+        rules.add(deferDirectiveLabel);
+
+        KnownOperationTypes knownOperationTypes = new KnownOperationTypes(validationContext, validationErrorCollector);
+        rules.add(knownOperationTypes);
 
         return rules;
     }

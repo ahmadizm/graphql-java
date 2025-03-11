@@ -3,13 +3,14 @@ package graphql.execution;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import graphql.DeprecatedAt;
 import graphql.ExecutionInput;
+import graphql.ExperimentalApi;
 import graphql.GraphQLContext;
 import graphql.GraphQLError;
+import graphql.Internal;
 import graphql.PublicApi;
-import graphql.cachecontrol.CacheControl;
 import graphql.collect.ImmutableKit;
+import graphql.execution.incremental.IncrementalCallState;
 import graphql.execution.instrumentation.Instrumentation;
 import graphql.execution.instrumentation.InstrumentationState;
 import graphql.language.Document;
@@ -19,6 +20,7 @@ import graphql.normalized.ExecutableNormalizedOperation;
 import graphql.normalized.ExecutableNormalizedOperationFactory;
 import graphql.schema.GraphQLSchema;
 import graphql.util.FpKit;
+import graphql.util.LockKit;
 import org.dataloader.DataLoaderRegistry;
 
 import java.util.HashSet;
@@ -50,13 +52,20 @@ public class ExecutionContext {
     private final Object localContext;
     private final Instrumentation instrumentation;
     private final AtomicReference<ImmutableList<GraphQLError>> errors = new AtomicReference<>(ImmutableKit.emptyList());
+    private final LockKit.ReentrantLock errorsLock = new LockKit.ReentrantLock();
     private final Set<ResultPath> errorPaths = new HashSet<>();
     private final DataLoaderRegistry dataLoaderRegistry;
-    private final CacheControl cacheControl;
     private final Locale locale;
+    private final IncrementalCallState incrementalCallState = new IncrementalCallState();
     private final ValueUnboxer valueUnboxer;
     private final ExecutionInput executionInput;
     private final Supplier<ExecutableNormalizedOperation> queryTree;
+    private final boolean propagateErrorsOnNonNullContractFailure;
+
+    // this is modified after creation so it needs to be volatile to ensure visibility across Threads
+    private volatile DataLoaderDispatchStrategy dataLoaderDispatcherStrategy = DataLoaderDispatchStrategy.NO_OP;
+
+    private final ResultNodesInfo resultNodesInfo = new ResultNodesInfo();
 
     ExecutionContext(ExecutionContextBuilder builder) {
         this.graphQLSchema = builder.graphQLSchema;
@@ -74,13 +83,14 @@ public class ExecutionContext {
         this.root = builder.root;
         this.instrumentation = builder.instrumentation;
         this.dataLoaderRegistry = builder.dataLoaderRegistry;
-        this.cacheControl = builder.cacheControl;
         this.locale = builder.locale;
         this.valueUnboxer = builder.valueUnboxer;
         this.errors.set(builder.errors);
         this.localContext = builder.localContext;
         this.executionInput = builder.executionInput;
-        queryTree = FpKit.interThreadMemoize(() -> ExecutableNormalizedOperationFactory.createExecutableNormalizedOperation(graphQLSchema, operationDefinition, fragmentsByName, coercedVariables));
+        this.dataLoaderDispatcherStrategy = builder.dataLoaderDispatcherStrategy;
+        this.queryTree = FpKit.interThreadMemoize(() -> ExecutableNormalizedOperationFactory.createExecutableNormalizedOperation(graphQLSchema, operationDefinition, fragmentsByName, coercedVariables));
+        this.propagateErrorsOnNonNullContractFailure = builder.propagateErrorsOnNonNullContractFailure;
     }
 
 
@@ -116,17 +126,6 @@ public class ExecutionContext {
         return operationDefinition;
     }
 
-    /**
-     * @return map of coerced variables
-     *
-     * @deprecated use {@link #getCoercedVariables()} instead
-     */
-    @Deprecated
-    @DeprecatedAt("2022-05-24")
-    public Map<String, Object> getVariables() {
-        return coercedVariables.toMap();
-    }
-
     public CoercedVariables getCoercedVariables() {
         return coercedVariables;
     }
@@ -134,11 +133,9 @@ public class ExecutionContext {
     /**
      * @param <T> for two
      * @return the legacy context
-     *
      * @deprecated use {@link #getGraphQLContext()} instead
      */
-    @Deprecated
-    @DeprecatedAt("2021-07-05")
+    @Deprecated(since = "2021-07-05")
     @SuppressWarnings({"unchecked", "TypeParameterUnusedInFormals"})
     public <T> T getContext() {
         return (T) context;
@@ -166,12 +163,6 @@ public class ExecutionContext {
         return dataLoaderRegistry;
     }
 
-    @Deprecated
-    @DeprecatedAt("2022-07-26")
-    public CacheControl getCacheControl() {
-        return cacheControl;
-    }
-
     public Locale getLocale() {
         return locale;
     }
@@ -181,13 +172,52 @@ public class ExecutionContext {
     }
 
     /**
+     * @return true if the current operation should propagate errors in non-null positions
+     * Propagating errors is the default. Error aware clients may opt in returning null in non-null positions
+     * by using the `@experimental_disableErrorPropagation` directive.
+     * @see graphql.Directives#setExperimentalDisableErrorPropagationEnabled(boolean) to change the JVM wide default
+     */
+    @ExperimentalApi
+    public boolean propagateErrorsOnNonNullContractFailure() {
+        return propagateErrorsOnNonNullContractFailure;
+    }
+
+    /**
+     * @return true if the current operation is a Query
+     */
+    public boolean isQueryOperation() {
+        return isOpType(OperationDefinition.Operation.QUERY);
+    }
+
+    /**
+     * @return true if the current operation is a Mutation
+     */
+    public boolean isMutationOperation() {
+        return isOpType(OperationDefinition.Operation.MUTATION);
+    }
+
+    /**
+     * @return true if the current operation is a Subscription
+     */
+    public boolean isSubscriptionOperation() {
+        return isOpType(OperationDefinition.Operation.SUBSCRIPTION);
+    }
+
+    private boolean isOpType(OperationDefinition.Operation operation) {
+        if (operationDefinition != null) {
+            return operation.equals(operationDefinition.getOperation());
+        }
+        return false;
+    }
+
+    /**
      * This method will only put one error per field path.
      *
      * @param error     the error to add
      * @param fieldPath the field path to put it under
      */
     public void addError(GraphQLError error, ResultPath fieldPath) {
-        synchronized (this) {
+        errorsLock.runLocked(() -> {
             //
             // see https://spec.graphql.org/October2021/#sec-Handling-Field-Errors about how per
             // field errors should be handled - ie only once per field if it's already there for nullability
@@ -197,7 +227,7 @@ public class ExecutionContext {
                 return;
             }
             this.errors.set(ImmutableKit.addToList(this.errors.get(), error));
-        }
+        });
     }
 
     /**
@@ -207,7 +237,7 @@ public class ExecutionContext {
      * @param error the error to add
      */
     public void addError(GraphQLError error) {
-        synchronized (this) {
+        errorsLock.runLocked(() -> {
             // see https://github.com/graphql-java/graphql-java/issues/888 on how the spec is unclear
             // on how exactly multiple errors should be handled - ie only once per field or not outside the nullability
             // aspect.
@@ -216,7 +246,7 @@ public class ExecutionContext {
                 this.errorPaths.add(path);
             }
             this.errors.set(ImmutableKit.addToList(this.errors.get(), error));
-        }
+        });
     }
 
     /**
@@ -229,9 +259,9 @@ public class ExecutionContext {
         if (errors.isEmpty()) {
             return;
         }
-        // we are synchronised because we set two fields at once - but we only ever read one of them later
+        // we are locked because we set two fields at once - but we only ever read one of them later
         // in getErrors so no need for synchronised there.
-        synchronized (this) {
+        errorsLock.runLocked(() -> {
             Set<ResultPath> newErrorPaths = new HashSet<>();
             for (GraphQLError error : errors) {
                 // see https://github.com/graphql-java/graphql-java/issues/888 on how the spec is unclear
@@ -244,7 +274,7 @@ public class ExecutionContext {
             }
             this.errorPaths.addAll(newErrorPaths);
             this.errors.set(ImmutableKit.concatLists(this.errors.get(), errors));
-        }
+        });
     }
 
     /**
@@ -254,7 +284,9 @@ public class ExecutionContext {
         return errors.get();
     }
 
-    public ExecutionStrategy getQueryStrategy() { return queryStrategy; }
+    public ExecutionStrategy getQueryStrategy() {
+        return queryStrategy;
+    }
 
     public ExecutionStrategy getMutationStrategy() {
         return mutationStrategy;
@@ -262,6 +294,10 @@ public class ExecutionContext {
 
     public ExecutionStrategy getSubscriptionStrategy() {
         return subscriptionStrategy;
+    }
+
+    public IncrementalCallState getIncrementalCallState() {
+        return incrementalCallState;
     }
 
     public ExecutionStrategy getStrategy(OperationDefinition.Operation operation) {
@@ -278,17 +314,30 @@ public class ExecutionContext {
         return queryTree;
     }
 
+    @Internal
+    public void setDataLoaderDispatcherStrategy(DataLoaderDispatchStrategy dataLoaderDispatcherStrategy) {
+        this.dataLoaderDispatcherStrategy = dataLoaderDispatcherStrategy;
+    }
+
+    @Internal
+    public DataLoaderDispatchStrategy getDataLoaderDispatcherStrategy() {
+        return dataLoaderDispatcherStrategy;
+    }
+
     /**
      * This helps you transform the current ExecutionContext object into another one by starting a builder with all
      * the current values and allows you to transform it how you want.
      *
      * @param builderConsumer the consumer code that will be given a builder to transform
-     *
      * @return a new ExecutionContext object based on calling build on that builder
      */
     public ExecutionContext transform(Consumer<ExecutionContextBuilder> builderConsumer) {
         ExecutionContextBuilder builder = ExecutionContextBuilder.newExecutionContextBuilder(this);
         builderConsumer.accept(builder);
         return builder.build();
+    }
+
+    public ResultNodesInfo getResultNodesInfo() {
+        return resultNodesInfo;
     }
 }

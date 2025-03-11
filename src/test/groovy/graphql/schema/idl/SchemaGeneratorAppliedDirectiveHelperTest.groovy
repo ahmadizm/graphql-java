@@ -56,8 +56,10 @@ class SchemaGeneratorAppliedDirectiveHelperTest extends Specification {
                 "bar",
                 "complex",
                 "deprecated",
+                "experimental_disableErrorPropagation",
                 "foo",
                 "include",
+                "oneOf",
                 "skip",
                 "specifiedBy",
         ]
@@ -105,8 +107,10 @@ class SchemaGeneratorAppliedDirectiveHelperTest extends Specification {
                 "bar",
                 "complex",
                 "deprecated",
+                "experimental_disableErrorPropagation",
                 "foo",
                 "include",
+                "oneOf",
                 "skip",
                 "specifiedBy",
         ]

@@ -88,12 +88,12 @@ class ScalarsStringTest extends Specification {
     @Unroll
     def "String parseValue throws exception for non-String values"() {
         when:
-        Scalars.GraphQLString.getCoercing().parseValue(literal, GraphQLContext.default, Locale.default)
+        Scalars.GraphQLString.getCoercing().parseValue(value, GraphQLContext.default, Locale.default)
         then:
-        def ex = thrown(CoercingParseValueException)
+        thrown(CoercingParseValueException)
 
         where:
-        literal      | _
+        value        | _
         123          | _
         true         | _
         customObject | _

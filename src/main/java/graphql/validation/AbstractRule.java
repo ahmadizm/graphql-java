@@ -1,6 +1,7 @@
 package graphql.validation;
 
 
+import graphql.ExperimentalApi;
 import graphql.Internal;
 import graphql.i18n.I18nMsg;
 import graphql.language.Argument;
@@ -11,6 +12,7 @@ import graphql.language.FragmentDefinition;
 import graphql.language.FragmentSpread;
 import graphql.language.InlineFragment;
 import graphql.language.Node;
+import graphql.language.ObjectValue;
 import graphql.language.OperationDefinition;
 import graphql.language.SelectionSet;
 import graphql.language.SourceLocation;
@@ -89,6 +91,17 @@ public class AbstractRule {
         return validationContext.getQueryPath();
     }
 
+    /**
+     * Verifies if the experimental API key is enabled
+     * @param key to be checked
+     * @return if the experimental API key is enabled
+     */
+    protected Boolean isExperimentalApiKeyEnabled(String key) {
+        return (getValidationContext() != null &&
+                getValidationContext().getGraphQLContext() != null ||
+                getValidationContext().getGraphQLContext().get(key) != null ||
+                ((Boolean) getValidationContext().getGraphQLContext().get(key)));
+    }
     /**
      * Creates an I18n message using the {@link graphql.i18n.I18nMsg}
      *
@@ -185,6 +198,10 @@ public class AbstractRule {
     }
 
     public void documentFinished(Document document) {
+
+    }
+
+    public void checkObjectValue(ObjectValue objectValue) {
 
     }
 

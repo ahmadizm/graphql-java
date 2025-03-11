@@ -11,6 +11,7 @@ import java.util.Map;
  */
 @PublicApi
 public class CoercedVariables {
+    private static final CoercedVariables EMPTY = CoercedVariables.of(ImmutableKit.emptyMap());
     private final ImmutableMapWithNullValues<String, Object> coercedVariables;
 
     public CoercedVariables(Map<String, Object> coercedVariables) {
@@ -30,10 +31,15 @@ public class CoercedVariables {
     }
 
     public static CoercedVariables emptyVariables() {
-        return new CoercedVariables(ImmutableKit.emptyMap());
+        return EMPTY;
     }
 
     public static CoercedVariables of(Map<String, Object> coercedVariables) {
         return new CoercedVariables(coercedVariables);
+    }
+
+    @Override
+    public String toString() {
+        return coercedVariables.toString();
     }
 }

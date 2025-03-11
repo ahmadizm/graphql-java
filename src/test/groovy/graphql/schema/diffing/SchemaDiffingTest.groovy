@@ -34,14 +34,14 @@ class SchemaDiffingTest extends Specification {
         schemaGraph.getVerticesByType(SchemaGraph.INTERFACE).size() == 0
         schemaGraph.getVerticesByType(SchemaGraph.UNION).size() == 0
         schemaGraph.getVerticesByType(SchemaGraph.SCALAR).size() == 2
-        schemaGraph.getVerticesByType(SchemaGraph.FIELD).size() == 39
+        schemaGraph.getVerticesByType(SchemaGraph.FIELD).size() == 40
         schemaGraph.getVerticesByType(SchemaGraph.ARGUMENT).size() == 9
         schemaGraph.getVerticesByType(SchemaGraph.INPUT_FIELD).size() == 0
         schemaGraph.getVerticesByType(SchemaGraph.INPUT_OBJECT).size() == 0
-        schemaGraph.getVerticesByType(SchemaGraph.DIRECTIVE).size() == 4
+        schemaGraph.getVerticesByType(SchemaGraph.DIRECTIVE).size() == 6
         schemaGraph.getVerticesByType(SchemaGraph.APPLIED_ARGUMENT).size() == 0
         schemaGraph.getVerticesByType(SchemaGraph.APPLIED_DIRECTIVE).size() == 0
-        schemaGraph.size() == 91
+        schemaGraph.size() == 94
 
     }
 
@@ -1187,8 +1187,9 @@ class SchemaDiffingTest extends Specification {
         then:
         /**
          * The test here is that the context of the applied argument is considered and that a2 is deleted and one b is inserted and another one changed.
+         * Note: this is not longer true
          */
-        operations.size() == 5
+        operations.size() == 8
     }
 
     def "with directives"() {
@@ -1551,6 +1552,43 @@ class SchemaDiffingTest extends Specification {
 
         then:
         operations.size() == 1
+    }
+
+
+    /*
+     * The schema can't be mapped at the moment because
+     * the arguments mapping doesn't work.
+     * The PossibleMappingCalculator finds two context: "Object.Query" (with one argument vertex) which is deleted
+     * and "Object.Foo" (with two argument vertices) which is added. Therefore one isolated vertex is added in the source
+     * to align both context.
+     *
+     * But the parent restrictions dictate that the target parent of i1 must be Query.foo, because Query.echo is fixed mapped
+     * to Query.foo. But that would mean i1 is deleted, but there is no isolated argument vertex for the target because of
+     * the contexts. So there is no possible mapping and the exception is thrown.
+     */
+
+    def "bug produced well known exception"() {
+        given:
+        def schema1 = schema('''
+    type Query {
+      echo(i1: String): String
+    }
+    ''')
+        def schema2 = schema('''
+    type Query {
+      foo: Foo
+    }
+    type Foo {
+      a(i2: String): String
+      b(i3: String): String
+    }
+''')
+
+        when:
+        def diff = new SchemaDiffing().diffGraphQLSchema(schema1, schema2)
+        then:
+        def e = thrown(RuntimeException)
+        e.message.contains("bug: ")
     }
 
 }

@@ -2,6 +2,9 @@ package graphql.execution;
 
 
 import graphql.Internal;
+import graphql.execution.conditional.ConditionalNodes;
+import graphql.execution.incremental.DeferredExecution;
+import graphql.execution.incremental.IncrementalUtils;
 import graphql.language.Field;
 import graphql.language.FragmentDefinition;
 import graphql.language.FragmentSpread;
@@ -24,7 +27,7 @@ import static graphql.execution.TypeFromAST.getTypeFromAST;
 
 /**
  * A field collector can iterate over field selection sets and build out the sub fields that have been selected,
- * expanding named and inline fragments as it goes.s
+ * expanding named and inline fragments as it goes.
  */
 @Internal
 public class FieldCollector {
@@ -32,13 +35,17 @@ public class FieldCollector {
     private final ConditionalNodes conditionalNodes = new ConditionalNodes();
 
     public MergedSelectionSet collectFields(FieldCollectorParameters parameters, MergedField mergedField) {
+        return collectFields(parameters, mergedField, false);
+    }
+
+    public MergedSelectionSet collectFields(FieldCollectorParameters parameters, MergedField mergedField, boolean incrementalSupport) {
         Map<String, MergedField> subFields = new LinkedHashMap<>();
         Set<String> visitedFragments = new LinkedHashSet<>();
         for (Field field : mergedField.getFields()) {
             if (field.getSelectionSet() == null) {
                 continue;
             }
-            this.collectFields(parameters, field.getSelectionSet(), visitedFragments, subFields);
+            this.collectFields(parameters, field.getSelectionSet(), visitedFragments, subFields, null, incrementalSupport);
         }
         return newMergedSelectionSet().subFields(subFields).build();
     }
@@ -52,63 +59,96 @@ public class FieldCollector {
      * @return a map of the sub field selections
      */
     public MergedSelectionSet collectFields(FieldCollectorParameters parameters, SelectionSet selectionSet) {
+        return collectFields(parameters, selectionSet, false);
+    }
+
+    public MergedSelectionSet collectFields(FieldCollectorParameters parameters, SelectionSet selectionSet, boolean incrementalSupport) {
         Map<String, MergedField> subFields = new LinkedHashMap<>();
         Set<String> visitedFragments = new LinkedHashSet<>();
-        this.collectFields(parameters, selectionSet, visitedFragments, subFields);
+        this.collectFields(parameters, selectionSet, visitedFragments, subFields, null, incrementalSupport);
         return newMergedSelectionSet().subFields(subFields).build();
     }
 
 
-    private void collectFields(FieldCollectorParameters parameters, SelectionSet selectionSet, Set<String> visitedFragments, Map<String, MergedField> fields) {
+    private void collectFields(FieldCollectorParameters parameters, SelectionSet selectionSet, Set<String> visitedFragments, Map<String, MergedField> fields, DeferredExecution deferredExecution, boolean incrementalSupport) {
 
         for (Selection selection : selectionSet.getSelections()) {
             if (selection instanceof Field) {
-                collectField(parameters, fields, (Field) selection);
+                collectField(parameters, fields, (Field) selection, deferredExecution);
             } else if (selection instanceof InlineFragment) {
-                collectInlineFragment(parameters, visitedFragments, fields, (InlineFragment) selection);
+                collectInlineFragment(parameters, visitedFragments, fields, (InlineFragment) selection, incrementalSupport);
             } else if (selection instanceof FragmentSpread) {
-                collectFragmentSpread(parameters, visitedFragments, fields, (FragmentSpread) selection);
+                collectFragmentSpread(parameters, visitedFragments, fields, (FragmentSpread) selection, incrementalSupport);
             }
         }
     }
 
-    private void collectFragmentSpread(FieldCollectorParameters parameters, Set<String> visitedFragments, Map<String, MergedField> fields, FragmentSpread fragmentSpread) {
+    private void collectFragmentSpread(FieldCollectorParameters parameters, Set<String> visitedFragments, Map<String, MergedField> fields, FragmentSpread fragmentSpread, boolean incrementalSupport) {
         if (visitedFragments.contains(fragmentSpread.getName())) {
             return;
         }
-        if (!conditionalNodes.shouldInclude(parameters.getVariables(), fragmentSpread.getDirectives())) {
+        if (!conditionalNodes.shouldInclude(fragmentSpread,
+                parameters.getVariables(),
+                parameters.getGraphQLSchema(),
+                parameters.getGraphQLContext())) {
             return;
         }
         visitedFragments.add(fragmentSpread.getName());
         FragmentDefinition fragmentDefinition = parameters.getFragmentsByName().get(fragmentSpread.getName());
 
-        if (!conditionalNodes.shouldInclude(parameters.getVariables(), fragmentDefinition.getDirectives())) {
+        if (!conditionalNodes.shouldInclude(fragmentDefinition,
+                parameters.getVariables(),
+                parameters.getGraphQLSchema(),
+                parameters.getGraphQLContext())) {
             return;
         }
         if (!doesFragmentConditionMatch(parameters, fragmentDefinition)) {
             return;
         }
-        collectFields(parameters, fragmentDefinition.getSelectionSet(), visitedFragments, fields);
+
+        DeferredExecution deferredExecution = incrementalSupport ? IncrementalUtils.createDeferredExecution(
+                parameters.getVariables(),
+                fragmentSpread.getDirectives(),
+                DeferredExecution::new
+        ) : null;
+
+        collectFields(parameters, fragmentDefinition.getSelectionSet(), visitedFragments, fields, deferredExecution, incrementalSupport);
     }
 
-    private void collectInlineFragment(FieldCollectorParameters parameters, Set<String> visitedFragments, Map<String, MergedField> fields, InlineFragment inlineFragment) {
-        if (!conditionalNodes.shouldInclude(parameters.getVariables(), inlineFragment.getDirectives()) ||
+    private void collectInlineFragment(FieldCollectorParameters parameters, Set<String> visitedFragments, Map<String, MergedField> fields, InlineFragment inlineFragment, boolean incrementalSupport) {
+        if (!conditionalNodes.shouldInclude(inlineFragment,
+                parameters.getVariables(),
+                parameters.getGraphQLSchema(),
+                parameters.getGraphQLContext()) ||
                 !doesFragmentConditionMatch(parameters, inlineFragment)) {
             return;
         }
-        collectFields(parameters, inlineFragment.getSelectionSet(), visitedFragments, fields);
+
+        DeferredExecution deferredExecution = incrementalSupport ? IncrementalUtils.createDeferredExecution(
+                parameters.getVariables(),
+                inlineFragment.getDirectives(),
+                DeferredExecution::new
+        ) : null;
+
+        collectFields(parameters, inlineFragment.getSelectionSet(), visitedFragments, fields, deferredExecution, incrementalSupport);
     }
 
-    private void collectField(FieldCollectorParameters parameters, Map<String, MergedField> fields, Field field) {
-        if (!conditionalNodes.shouldInclude(parameters.getVariables(), field.getDirectives())) {
+    private void collectField(FieldCollectorParameters parameters, Map<String, MergedField> fields, Field field, DeferredExecution deferredExecution) {
+        if (!conditionalNodes.shouldInclude(field,
+                parameters.getVariables(),
+                parameters.getGraphQLSchema(),
+                parameters.getGraphQLContext())) {
             return;
         }
         String name = field.getResultKey();
         if (fields.containsKey(name)) {
             MergedField curFields = fields.get(name);
-            fields.put(name, curFields.transform(builder -> builder.addField(field)));
+            fields.put(name, curFields.transform(builder -> builder
+                    .addField(field)
+                    .addDeferredExecution(deferredExecution))
+            );
         } else {
-            fields.put(name, MergedField.newMergedField(field).build());
+            fields.put(name, MergedField.newSingletonMergedField(field, deferredExecution));
         }
     }
 
